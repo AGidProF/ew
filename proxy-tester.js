@@ -60,7 +60,7 @@ class GitHubProxyTester {
       
       await fs.writeFile(this.workingLogFile, '# Working Proxies Log - Started at ' + new Date().toISOString() + '\n');
       await fs.writeFile(this.deadLogFile, '# Dead Proxies Log - Started at ' + new Date().toISOString() + '\n');
-      await fs.writeFile(this.liveLogFile, '# REAL-TIME LOG - Every Proxy Test\n# Started at ' + new Date().toISOString() + '\n\n');
+      await fs.writeFile(this.liveLogFile, '# COMPREHENSIVE REAL-TIME LOG - Every Proxy Test\n# Started at ' + new Date().toISOString() + '\n# Format: [timestamp] status: proxy | response_time | test_url | details\n\n');
       await fs.writeFile(this.tempResultsFile, ''); // Empty temp file
       
       this.log("📄 Initialized all result files");
@@ -74,18 +74,29 @@ class GitHubProxyTester {
       const status = proxyData.success ? '✅ WORKING' : '❌ DEAD';
       const emoji = proxyData.success ? '🟢' : '🔴';
       
-      const liveLogLine = `[${new Date().toISOString()}] ${emoji} ${status}: ${proxyData.proxy} | ${proxyData.responseTime}ms | via ${proxyData.testUrl || 'N/A'}${proxyData.error ? ' | error: ' + proxyData.error : ''}\n`;
+      // Enhanced live log with more details
+      let liveLogLine;
+      if (proxyData.success) {
+        liveLogLine = `[${new Date().toISOString()}] ${emoji} ${status}: ${proxyData.proxy} | ${proxyData.responseTime}ms | via ${proxyData.testUrl} | size: ${proxyData.responseSize || 'N/A'}b | attempt: ${proxyData.attempt || 1} | speed: ${this.getSpeedCategory(proxyData.responseTime)}\n`;
+      } else {
+        liveLogLine = `[${new Date().toISOString()}] ${emoji} ${status}: ${proxyData.proxy} | ${proxyData.responseTime}ms | via ${proxyData.testUrl || 'N/A'} | attempts: ${proxyData.attempts || 1} | error: ${proxyData.error || 'timeout'}\n`;
+      }
       
       await fs.appendFile(this.liveLogFile, liveLogLine);
       
-      const consoleMsg = proxyData.success 
-        ? `🟢 WORKING: ${proxyData.proxy} (${proxyData.responseTime}ms)`
-        : `🔴 DEAD: ${proxyData.proxy} (${proxyData.responseTime}ms) - ${proxyData.error || 'timeout'}`;
+      // Enhanced console output with more info
+      let consoleMsg;
+      if (proxyData.success) {
+        consoleMsg = `🟢 WORKING: ${proxyData.proxy} (${proxyData.responseTime}ms) [${this.getSpeedCategory(proxyData.responseTime)}] via ${proxyData.testUrl} - Size: ${proxyData.responseSize || 'N/A'}b`;
+      } else {
+        consoleMsg = `🔴 DEAD: ${proxyData.proxy} (${proxyData.responseTime}ms) via ${proxyData.testUrl || 'multiple'} - ${proxyData.error || 'timeout'}`;
+      }
       
       this.log(consoleMsg);
       
     } catch (error) {
       // Silent fail to not interrupt main flow
+      console.log(`Log error for ${proxyData.proxy}: ${error.message}`);
     }
   }
 
@@ -111,16 +122,31 @@ class GitHubProxyTester {
         // Silent fail if sync not supported
       }
       
+      // GitHub Actions specific: Ensure file is visible
+      this.log(`💾 SAVED TO hasil.txt: ${proxyData.proxy} (${this.workingProxies.length + 1} total working)`);
+      
     } catch (error) {
       this.log(`❌ Error saving working proxy: ${error.message}`);
       
-      // Fallback: try to save to backup location
-      try {
-        await fs.appendFile('backup_working.txt', `${proxyData.proxy}\n`);
-      } catch (backupError) {
-        // Ultimate fallback: log to console
-        console.log(`BACKUP PROXY: ${proxyData.proxy}`);
+      // Multiple fallback mechanisms for GitHub Actions
+      const fallbackMethods = [
+        async () => await fs.appendFile('backup_working.txt', `${proxyData.proxy}\n`),
+        async () => await fs.appendFile('emergency_results.txt', `${proxyData.proxy}\n`),
+        async () => await fs.appendFile(`hasil_${Date.now()}.txt`, `${proxyData.proxy}\n`),
+      ];
+      
+      for (const fallback of fallbackMethods) {
+        try {
+          await fallback();
+          this.log(`✅ Saved to fallback location: ${proxyData.proxy}`);
+          break;
+        } catch (fallbackError) {
+          // Continue to next fallback
+        }
       }
+      
+      // Ultimate fallback: environment variable (GitHub Actions can capture this)
+      console.log(`::notice title=Working Proxy Found::${proxyData.proxy} (${proxyData.responseTime}ms)`);
     }
   }
 
@@ -138,6 +164,24 @@ class GitHubProxyTester {
     if (responseTime < 3000) return 'MEDIUM';
     if (responseTime < 5000) return 'SLOW';
     return 'VERY_SLOW';
+  }
+
+  getSpeedDistribution() {
+    if (this.workingProxies.length === 0) return 'No working proxies yet';
+    
+    const distribution = {
+      FAST: 0,
+      MEDIUM: 0, 
+      SLOW: 0,
+      VERY_SLOW: 0
+    };
+    
+    this.workingProxies.forEach(proxy => {
+      const category = this.getSpeedCategory(proxy.responseTime);
+      distribution[category]++;
+    });
+    
+    return `Fast: ${distribution.FAST}, Medium: ${distribution.MEDIUM}, Slow: ${distribution.SLOW}, Very Slow: ${distribution.VERY_SLOW}`;
   }
 
   async fetchProxies() {
@@ -407,10 +451,19 @@ class GitHubProxyTester {
       
       const progress = ((totalTested / proxiesToTest.length) * 100).toFixed(1);
       
-      const batchSummary = `📊 BATCH ${batchNumber}/${totalBatches} | Working: ${batchWorking}/${batch.length} | Progress: ${progress}% | Total Working: ${workingCount}`;
+      const batchSummary = `📊 BATCH ${batchNumber}/${totalBatches} COMPLETED | Working: ${batchWorking}/${batch.length} (${((batchWorking/batch.length)*100).toFixed(1)}%) | Progress: ${progress}% | Total Working: ${workingCount}/${totalTested}`;
       this.log(batchSummary);
       
-      await fs.appendFile(this.liveLogFile, `\n[${new Date().toISOString()}] ${batchSummary}\n\n`);
+      // Enhanced batch logging with working proxy details
+      const batchLogDetails = `
+[${new Date().toISOString()}] ${batchSummary}
+[${new Date().toISOString()}] 📈 Batch Stats: ${batchWorking} working, ${batch.length - batchWorking} dead
+[${new Date().toISOString()}] 📊 Overall Stats: ${workingCount} working out of ${totalTested} tested (${((workingCount/totalTested)*100).toFixed(2)}% success rate)
+[${new Date().toISOString()}] ⚡ Speed Distribution: ${this.getSpeedDistribution()}
+
+`;
+      
+      await fs.appendFile(this.liveLogFile, batchLogDetails);
       
       // Shorter delay for faster completion
       if (i + batchSize < proxiesToTest.length) {
@@ -423,9 +476,32 @@ class GitHubProxyTester {
     this.stats.totalDead = this.deadProxies.length;
     
     this.log(`🎯 Testing complete!`);
-    this.log(`📊 Results: ${this.workingProxies.length} working, ${this.deadProxies.length} dead out of ${totalTested} tested`);
+    this.log(`📊 Final Results: ${this.workingProxies.length} working, ${this.deadProxies.length} dead out of ${totalTested} tested`);
+    this.log(`🏆 Success Rate: ${((this.stats.totalWorking / this.stats.totalTested) * 100).toFixed(2)}%`);
+    this.log(`⚡ Speed Distribution: ${this.getSpeedDistribution()}`);
     
-    await fs.appendFile(this.liveLogFile, `\n# TESTING COMPLETED at ${new Date().toISOString()}\n# RESULTS: ${this.workingProxies.length} working, ${this.deadProxies.length} dead\n`);
+    // Enhanced final log with detailed summary
+    const finalLogSummary = `
+# ===============================================
+# 🎯 TESTING COMPLETED at ${new Date().toISOString()}
+# ===============================================
+# 📊 FINAL RESULTS:
+# - Working Proxies: ${this.workingProxies.length}
+# - Dead Proxies: ${this.deadProxies.length}  
+# - Total Tested: ${totalTested}
+# - Success Rate: ${((this.stats.totalWorking / this.stats.totalTested) * 100).toFixed(2)}%
+# - Speed Distribution: ${this.getSpeedDistribution()}
+# 
+# 🏆 TOP 5 FASTEST WORKING PROXIES:
+${this.workingProxies
+  .sort((a, b) => a.responseTime - b.responseTime)
+  .slice(0, 5)
+  .map((p, i) => `# ${i + 1}. ${p.proxy} (${p.responseTime}ms) [${this.getSpeedCategory(p.responseTime)}]`)
+  .join('\n')}
+# ===============================================
+`;
+    
+    await fs.appendFile(this.liveLogFile, finalLogSummary);
   }
 
   async finalizeResults() {
