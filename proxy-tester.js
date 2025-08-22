@@ -17,9 +17,7 @@ const proxySources = [
 
 // Test URLs untuk memverifikasi proxy
 const testUrls = [
-  "https://httpbin.org/ip",
-  "https://icanhazip.com",
-  "https://ipinfo.io/ip"
+  "https://otakudesu.best/anime/watanare-sub-indo"
 ];
 
 class GitHubProxyTester {
