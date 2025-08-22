@@ -1,68 +1,245 @@
-# .github/workflows/proxy-tester.yml
-name: Proxy Tester
+# .github/workflows/proxy-test.yml
+name: 🔍 Proxy Tester - Auto Update Results
 
 on:
   schedule:
-    # Jalankan setiap 3 jam (optimal untuk free tier)
-    - cron: '0 */3 * * *'
-    # Alternative: 4x sehari - cron: '0 6,12,18,0 * * *'
-  # Manual trigger
-  workflow_dispatch:
-  # Jalankan saat push ke main
+    # Runs every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:  # Manual trigger
   push:
-    branches: [ main ]
+    branches: [ main, master ]
+    paths: 
+      - 'proxy-tester.js'
+      - '.github/workflows/proxy-test.yml'
 
 jobs:
   test-proxies:
     runs-on: ubuntu-latest
-    timeout-minutes: 50  # Timeout 50 menit untuk safety
+    
+    permissions:
+      contents: write  # Important: needed to push results back
     
     steps:
-    - name: Checkout repository
+    - name: 🔄 Checkout Repository
       uses: actions/checkout@v4
       with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        
-    - name: Setup Node.js
+        fetch-depth: 0  # Full history for better git operations
+    
+    - name: 🟢 Setup Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '18'
-        
-    - name: Install dependencies
+    
+    - name: 📦 Install Dependencies
       run: |
+        npm init -y
         npm install axios https-proxy-agent
-        
-    - name: Run proxy tester
-      run: node proxy-tester.js
-      
-    - name: Commit and push hasil.txt
+        echo "✅ Dependencies installed"
+    
+    - name: 🔧 Setup Git Config
       run: |
         git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
+        git config --local user.name "GitHub Action Bot"
+        git config --local core.autocrlf false
+        git config --local core.safecrlf false
+        echo "✅ Git configured"
+    
+    - name: 📋 Pre-test Status
+      run: |
+        echo "🔍 Repository Status Before Testing:"
+        ls -la
+        echo ""
+        echo "📂 Current files:"
+        find . -name "*.txt" -o -name "*.log" -o -name "*.json" | head -10
+        echo ""
+        echo "🌐 Testing environment:"
+        node --version
+        npm --version
+    
+    - name: 🧪 Run Proxy Tester
+      id: test_proxies
+      run: |
+        echo "🚀 Starting proxy testing..."
+        echo "⏰ Start time: $(date)"
+        
+        # Set timeout to prevent infinite running (GitHub Actions has 6 hour limit)
+        timeout 5400s node proxy-tester.js || {
+          echo "⚠️ Timeout reached (90 minutes), but checking for results..."
+          exit_code=$?
+          if [ $exit_code -eq 124 ]; then
+            echo "🔄 Process timed out, but may have partial results"
+          else
+            echo "❌ Process failed with exit code: $exit_code"
+          fi
+        }
+        
+        echo "⏰ End time: $(date)"
+        echo "✅ Testing phase completed"
+    
+    - name: 📊 Verify Results Created
+      run: |
+        echo "🔍 Checking generated files:"
+        ls -la *.txt *.log *.json 2>/dev/null || echo "No result files found yet"
+        echo ""
+        
+        if [ -f "hasil.txt" ]; then
+          echo "✅ hasil.txt found!"
+          echo "📏 Size: $(wc -l < hasil.txt) lines"
+          echo "📄 First 10 lines:"
+          head -10 hasil.txt
+          echo ""
+          echo "📄 Last 5 lines:"
+          tail -5 hasil.txt
+        else
+          echo "❌ hasil.txt not found!"
+          echo "🔍 Looking for alternative result files..."
+          find . -name "*working*" -o -name "*result*" -o -name "*proxy*" | grep -E "\.(txt|log)$"
+        fi
+        
+        if [ -f "stats.json" ]; then
+          echo ""
+          echo "📊 Stats summary:"
+          cat stats.json | jq -r '.summary // empty' 2>/dev/null || echo "Stats file exists but no summary available"
+        fi
+    
+    - name: 🔄 Force Create hasil.txt if Missing
+      run: |
+        if [ ! -f "hasil.txt" ]; then
+          echo "🚨 hasil.txt missing! Creating emergency version..."
+          
+          # Try to recover from log files
+          if [ -f "working_proxies.log" ]; then
+            echo "📋 Extracting proxies from working_proxies.log..."
+            grep -o "[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}:[0-9]\{1,5\}" working_proxies.log > hasil.txt || true
+          fi
+          
+          # Try to extract from live log
+          if [ -f "live_testing.log" ] && [ ! -s "hasil.txt" ]; then
+            echo "📋 Extracting proxies from live_testing.log..."
+            grep "WORKING:" live_testing.log | grep -o "[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}:[0-9]\{1,5\}" > hasil.txt || true
+          fi
+          
+          # Create minimal file if nothing found
+          if [ ! -s "hasil.txt" ]; then
+            echo "# No working proxies found in this run" > hasil.txt
+            echo "# Tested at: $(date)" >> hasil.txt
+            echo "# Check logs for details" >> hasil.txt
+          fi
+          
+          echo "✅ Emergency hasil.txt created"
+        fi
+    
+    - name: 📤 Commit and Push Results  
+      run: |
+        echo "📋 Preparing to commit results..."
         
         # Add all result files
-        git add hasil.txt stats.json working_proxies.log dead_proxies.log live_testing.log
+        git add -f hasil.txt *.log *.json 2>/dev/null || true
         
-        # Check if there are changes
+        # Check if there are changes to commit
         if git diff --staged --quiet; then
-          echo "No changes to commit"
-        else
-          # Get working proxy count for commit message
-          WORKING_COUNT=$(grep -c "^[0-9]" hasil.txt || echo "0")
-          git commit -m "Update proxy list: ${WORKING_COUNT} working proxies - $(date '+%Y-%m-%d %H:%M:%S UTC')"
-          git push
+          echo "⚠️ No changes to commit"
+          
+          # Force create a status file to show the action ran
+          echo "# Proxy Test Status - $(date)" > proxy_test_status.txt
+          echo "# Last run: $(date -u)" >> proxy_test_status.txt
+          echo "# Repository: ${{ github.repository }}" >> proxy_test_status.txt
+          echo "# Commit: ${{ github.sha }}" >> proxy_test_status.txt
+          
+          if [ -f "hasil.txt" ]; then
+            echo "# Working proxies found: $(grep -c '^[0-9]' hasil.txt || echo '0')" >> proxy_test_status.txt
+          else
+            echo "# Working proxies found: 0" >> proxy_test_status.txt
+          fi
+          
+          git add proxy_test_status.txt
         fi
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         
-    - name: Upload artifacts
+        # Get working proxy count for commit message
+        WORKING_COUNT=0
+        if [ -f "hasil.txt" ]; then
+          WORKING_COUNT=$(grep -c '^[0-9]' hasil.txt 2>/dev/null || echo '0')
+        fi
+        
+        # Commit with detailed message
+        git commit -m "🔍 Proxy Test Results - $(date +%Y%m%d-%H%M%S)
+
+        📊 Found: ${WORKING_COUNT} working proxies
+        ⏰ Tested at: $(date -u)
+        🤖 Auto-generated by GitHub Actions
+        
+        Files updated:
+        - hasil.txt (working proxies)
+        - *.log (detailed logs)  
+        - stats.json (statistics)
+        " || {
+          echo "⚠️ Nothing to commit or commit failed"
+          exit 0
+        }
+        
+        echo "📤 Pushing to repository..."
+        git push || {
+          echo "❌ Push failed, trying force push..."
+          git push --force-with-lease || {
+            echo "❌ Force push also failed"
+            echo "🔍 Repository status:"
+            git status
+            exit 1
+          }
+        }
+        
+        echo "✅ Results successfully pushed to repository!"
+    
+    - name: 📊 Final Summary
+      if: always()
+      run: |
+        echo ""
+        echo "========================================"
+        echo "🎯 PROXY TESTING WORKFLOW SUMMARY"
+        echo "========================================"
+        echo "⏰ Completed at: $(date)"
+        echo "📂 Repository: ${{ github.repository }}"
+        echo "🌟 Branch: ${{ github.ref_name }}"
+        echo ""
+        
+        if [ -f "hasil.txt" ]; then
+          WORKING_COUNT=$(grep -c '^[0-9]' hasil.txt 2>/dev/null || echo '0')
+          echo "✅ Working Proxies: ${WORKING_COUNT}"
+          echo "📄 Results file: hasil.txt"
+        else
+          echo "❌ No hasil.txt found"
+        fi
+        
+        echo "📋 Generated files:"
+        ls -la *.txt *.log *.json 2>/dev/null | awk '{print "   " $0}' || echo "   No result files"
+        
+        if [ -f "stats.json" ]; then
+          echo ""
+          echo "📊 Quick Stats:"
+          cat stats.json | jq -r '
+            if .error then 
+              "   ❌ Error: " + .message
+            else 
+              "   📡 Fetched: " + (.summary.totalFetched // 0 | tostring) +
+              "\n   🧪 Tested: " + (.summary.totalTested // 0 | tostring) +
+              "\n   ✅ Working: " + (.summary.totalWorking // 0 | tostring) +
+              "\n   📊 Success Rate: " + (.summary.successRate // "N/A")
+            end
+          ' 2>/dev/null || echo "   📊 Stats not available"
+        fi
+        
+        echo "========================================"
+        echo "🔗 Check your repository for results!"
+        echo "========================================"
+    
+    - name: 📺 Upload Artifacts (Backup)
+      if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: proxy-results
+        name: proxy-test-results-${{ github.run_number }}
         path: |
           hasil.txt
-          stats.json
-          working_proxies.log
-          dead_proxies.log
-          live_testing.log
-        retention-days: 7
+          *.log
+          *.json
+          proxy_test_status.txt
+        retention-days: 30
