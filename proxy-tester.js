@@ -1,4 +1,4 @@
-// proxy-tester.js
+// proxy-tester.js - Super Real-time Version
 const axios = require("axios");
 const { HttpsProxyAgent } = require("https-proxy-agent");
 const fs = require("fs").promises;
@@ -16,7 +16,11 @@ const proxySources = [
 ];
 
 // Test URLs untuk memverifikasi proxy
-const testUrls = ["https://otakudesu.best/anime/watanare-sub-indo"];
+const testUrls = [
+  "https://httpbin.org/ip",
+  "https://icanhazip.com",
+  "https://ipinfo.io/ip"
+];
 
 class GitHubProxyTester {
   constructor() {
@@ -26,6 +30,7 @@ class GitHubProxyTester {
     this.workingProxiesFile = 'hasil.txt';
     this.workingLogFile = 'working_proxies.log';
     this.deadLogFile = 'dead_proxies.log';
+    this.liveLogFile = 'live_testing.log';
     this.stats = {
       totalFetched: 0,
       totalTested: 0,
@@ -38,14 +43,19 @@ class GitHubProxyTester {
     };
   }
 
+  log(message) {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] ${message}`);
+  }
+
   async initializeResultFiles() {
     try {
       // Initialize empty result files
-      await fs.writeFile(this.workingProxiesFile, '# Working Proxies - Real-time Updates\n# Format: proxy (response_time ms) via test_url at timestamp\n\n');
+      await fs.writeFile(this.workingProxiesFile, '# Working Proxies - Super Real-time Updates\n# Format: proxy (response_time ms) via test_url at timestamp\n\n');
       await fs.writeFile(this.workingLogFile, '# Working Proxies Log - Started at ' + new Date().toISOString() + '\n');
       await fs.writeFile(this.deadLogFile, '# Dead Proxies Log - Started at ' + new Date().toISOString() + '\n');
-      await fs.writeFile('live_testing.log', '# Live Testing Log - Every Proxy Tested\n# Started at ' + new Date().toISOString() + '\n');
-      this.log("📄 Initialized all result files for super real-time updates");
+      await fs.writeFile(this.liveLogFile, '# SUPER REAL-TIME LOG - Every Single Proxy Tested\n# Started at ' + new Date().toISOString() + '\n# Format: [timestamp] emoji status: proxy | response_time | via test_url | attempt | error\n\n');
+      this.log("📄 Initialized all result files for SUPER real-time updates");
     } catch (error) {
       this.log(`❌ Error initializing files: ${error.message}`);
     }
@@ -60,7 +70,7 @@ class GitHubProxyTester {
       const liveLogLine = `[${new Date().toISOString()}] ${emoji} ${status}: ${proxyData.proxy} | ${proxyData.responseTime}ms | via ${proxyData.testUrl || 'N/A'} | attempt ${proxyData.attempt || proxyData.attempts || 1}${proxyData.error ? ' | error: ' + proxyData.error : ''}\n`;
       
       // Append to live testing log immediately
-      await fs.appendFile('live_testing.log', liveLogLine);
+      await fs.appendFile(this.liveLogFile, liveLogLine);
       
       // Console log every single proxy
       const consoleMsg = proxyData.success 
@@ -80,19 +90,41 @@ class GitHubProxyTester {
       const line = `${proxyData.proxy}\n`;
       await fs.appendFile(this.workingProxiesFile, line);
       
-      // Detailed log entry
-      const logLine = `[${new Date().toISOString()}] ✅ WORKING: ${proxyData.proxy} | ${proxyData.responseTime}ms | via ${proxyData.testUrl} | attempt ${proxyData.attempt}\n`;
+      // Detailed log entry for working proxies
+      const logLine = `[${new Date().toISOString()}] ✅ WORKING: ${proxyData.proxy} | ${proxyData.responseTime}ms | via ${proxyData.testUrl} | attempt ${proxyData.attempt} | speed: ${this.getSpeedCategory(proxyData.responseTime)}\n`;
       await fs.appendFile(this.workingLogFile, logLine);
       
-      this.log(`✅ WORKING: ${proxyData.proxy} (${proxyData.responseTime}ms) - SAVED IMMEDIATELY`);
+      // Update counter in real-time
+      await this.updateLiveCounter();
+      
     } catch (error) {
       this.log(`❌ Error saving working proxy: ${error.message}`);
     }
   }
 
-  log(message) {
-    const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] ${message}`);
+  async appendDeadProxy(proxyData) {
+    try {
+      const logLine = `[${new Date().toISOString()}] ❌ DEAD: ${proxyData.proxy} | ${proxyData.responseTime}ms | attempts: ${proxyData.attempts} | error: ${proxyData.error || 'timeout'} | test_url: ${proxyData.testUrl || 'multiple'}\n`;
+      await fs.appendFile(this.deadLogFile, logLine);
+    } catch (error) {
+      // Silent fail untuk dead proxy logging
+    }
+  }
+
+  getSpeedCategory(responseTime) {
+    if (responseTime < 1000) return 'FAST';
+    if (responseTime < 3000) return 'MEDIUM';
+    if (responseTime < 5000) return 'SLOW';
+    return 'VERY_SLOW';
+  }
+
+  async updateLiveCounter() {
+    try {
+      const counterLine = `# LIVE COUNTER - Working: ${this.workingProxies.length} | Dead: ${this.deadProxies.length} | Total Tested: ${this.workingProxies.length + this.deadProxies.length} | Updated: ${new Date().toISOString()}\n`;
+      await fs.appendFile(this.liveLogFile, counterLine);
+    } catch (error) {
+      // Silent fail
+    }
   }
 
   async fetchProxies() {
@@ -230,7 +262,8 @@ class GitHubProxyTester {
             success: false, 
             responseTime: Date.now() - startTime,
             error: error.message.substring(0, 50),
-            attempts: retry + 1
+            attempts: retry + 1,
+            testUrl: testUrls[(testUrlIndex + retry) % testUrls.length].split('/')[2]
           };
         }
       }
@@ -240,7 +273,8 @@ class GitHubProxyTester {
       proxy, 
       success: false, 
       responseTime: Date.now() - startTime,
-      attempts: maxRetries 
+      attempts: maxRetries,
+      testUrl: testUrls[testUrlIndex].split('/')[2]
     };
   }
 
@@ -256,8 +290,9 @@ class GitHubProxyTester {
     await this.initializeResultFiles();
     
     this.log(`🧪 Starting to test ${proxiesToTest.length} proxies...`);
-    this.log(`⚡ Real-time results: Working proxies saved immediately to ${this.workingProxiesFile}`);
-    this.log(`📋 Detailed logs: ${this.workingLogFile} & ${this.deadLogFile}`);
+    this.log(`🔥 SUPER REAL-TIME MODE: Every single proxy will be logged immediately!`);
+    this.log(`📄 Results file: ${this.workingProxiesFile}`);
+    this.log(`🔥 Live log: ${this.liveLogFile}`);
     
     // Concurrent testing dengan batch processing
     const batchSize = 50; // Test 50 proxies at a time
@@ -288,7 +323,7 @@ class GitHubProxyTester {
       // Wait for all concurrent groups in this batch
       const batchResults = await Promise.all(batchPromises);
       
-      // Process results and save immediately
+      // Process results and log every single proxy immediately
       let batchWorking = 0;
       for (const concurrentResults of batchResults) {
         for (const result of concurrentResults) {
@@ -308,7 +343,7 @@ class GitHubProxyTester {
               
               this.workingProxies.push(workingProxy);
               
-              // LOG EVERY SINGLE PROXY TEST FIRST
+              // LOG EVERY SINGLE PROXY TEST FIRST (SUPER REAL-TIME)
               await this.logEveryProxyTest(workingProxy);
               
               // SAVE TO WORKING FILES
@@ -329,7 +364,7 @@ class GitHubProxyTester {
               
               this.deadProxies.push(deadProxy);
               
-              // LOG EVERY SINGLE PROXY TEST FIRST
+              // LOG EVERY SINGLE PROXY TEST FIRST (SUPER REAL-TIME)
               await this.logEveryProxyTest(deadProxy);
               
               // SAVE TO DEAD FILES
@@ -346,7 +381,7 @@ class GitHubProxyTester {
       this.log(batchSummary);
       
       // Live batch summary to log file
-      await fs.appendFile('live_testing.log', `\n[${new Date().toISOString()}] ${batchSummary}\n\n`);
+      await fs.appendFile(this.liveLogFile, `\n[${new Date().toISOString()}] ${batchSummary}\n\n`);
       
       // Update hasil.txt header with current stats
       await this.updateResultsHeader(workingCount, totalTested, proxiesToTest.length);
@@ -365,15 +400,15 @@ class GitHubProxyTester {
     this.log(`📊 Final Results: ${this.workingProxies.length} working, ${this.deadProxies.length} dead out of ${totalTested} tested`);
     this.log(`📄 All working proxies available in: ${this.workingProxiesFile}`);
     this.log(`📋 Detailed logs in: ${this.workingLogFile} & ${this.deadLogFile}`);
-    this.log(`🔥 SUPER REAL-TIME log in: live_testing.log (every single proxy)`);
+    this.log(`🔥 SUPER REAL-TIME log in: ${this.liveLogFile} (every single proxy)`);
     
     // Final live log entry
-    await fs.appendFile('live_testing.log', `\n# TESTING COMPLETED at ${new Date().toISOString()}\n# FINAL RESULTS: ${this.workingProxies.length} working, ${this.deadProxies.length} dead, ${totalTested} total tested\n`);
+    await fs.appendFile(this.liveLogFile, `\n# TESTING COMPLETED at ${new Date().toISOString()}\n# FINAL RESULTS: ${this.workingProxies.length} working, ${this.deadProxies.length} dead, ${totalTested} total tested\n`);
   }
 
   async updateResultsHeader(workingCount, testedCount, totalCount) {
     try {
-      const header = `# Working Proxies - Real-time Updates
+      const header = `# Working Proxies - Super Real-time Updates
 # Status: ${workingCount} working out of ${testedCount} tested (${totalCount} total)
 # Success Rate: ${((workingCount / testedCount) * 100).toFixed(2)}%
 # Last Updated: ${new Date().toISOString()}
@@ -401,6 +436,7 @@ class GitHubProxyTester {
       // Silent fail for header update
     }
   }
+
   async saveResults() {
     try {
       this.stats.endTime = new Date();
@@ -410,7 +446,7 @@ class GitHubProxyTester {
       this.workingProxies.sort((a, b) => a.responseTime - b.responseTime);
       
       // Final update to hasil.txt with sorted results
-      const finalHeader = `# Working Proxies - Final Results
+      const finalHeader = `# Working Proxies - Final Results (Super Real-time)
 # Total Working: ${this.workingProxies.length}
 # Total Tested: ${this.stats.totalTested}
 # Total Fetched: ${this.stats.totalFetched}
@@ -444,14 +480,14 @@ class GitHubProxyTester {
           workingProxies: this.workingProxiesFile,
           workingLog: this.workingLogFile,
           deadLog: this.deadLogFile,
-          liveLog: 'live_testing.log',
+          liveLog: this.liveLogFile,
           stats: 'stats.json'
         },
         sources: this.stats.sources,
         topWorkingProxies: this.workingProxies.slice(0, 10), // Top 10 fastest
         errors: this.stats.errors,
         lastUpdate: new Date().toISOString(),
-        generatedBy: 'GitHub Actions Proxy Tester - Real-time'
+        generatedBy: 'GitHub Actions Proxy Tester - Super Real-time'
       };
       
       await fs.writeFile('stats.json', JSON.stringify(statsData, null, 2));
@@ -459,24 +495,24 @@ class GitHubProxyTester {
       // Final log entries
       await fs.appendFile(this.workingLogFile, `\n# Final Summary: ${this.workingProxies.length} working proxies found\n# Testing completed at: ${new Date().toISOString()}\n`);
       await fs.appendFile(this.deadLogFile, `\n# Final Summary: ${this.deadProxies.length} dead proxies found\n# Testing completed at: ${new Date().toISOString()}\n`);
-      await fs.appendFile('live_testing.log', `\n# FINAL SUMMARY: ${this.workingProxies.length} working, ${this.deadProxies.length} dead\n# Total execution time: ${duration} seconds\n# All proxies logged in real-time above\n`);
+      await fs.appendFile(this.liveLogFile, `\n# FINAL SUMMARY: ${this.workingProxies.length} working, ${this.deadProxies.length} dead\n# Total execution time: ${duration} seconds\n# All proxies logged in real-time above\n`);
       
       this.log(`💾 Final results saved:`);
       this.log(`   📄 ${this.workingProxiesFile}: ${this.workingProxies.length} working proxies (sorted by speed)`);
       this.log(`   📊 stats.json: Complete statistics and metadata`);
       this.log(`   📋 ${this.workingLogFile}: Detailed working proxy log`);
       this.log(`   💀 ${this.deadLogFile}: Detailed dead proxy log`);
-      this.log(`   🔥 live_testing.log: EVERY SINGLE PROXY tested (real-time)`);
+      this.log(`   🔥 ${this.liveLogFile}: EVERY SINGLE PROXY tested (real-time)`);
       this.log(`⏱️ Total execution time: ${duration} seconds`);
       
       // Log summary
       console.log('\n' + '='.repeat(60));
-      console.log('🎯 PROXY TESTING SUMMARY - REAL-TIME MODE');
+      console.log('🔥 SUPER REAL-TIME PROXY TESTING SUMMARY');
       console.log('='.repeat(60));
       console.log(`📡 Total Fetched: ${this.stats.totalFetched}`);
       console.log(`🧪 Total Tested: ${this.stats.totalTested}`);
-      console.log(`✅ Working: ${this.stats.totalWorking} (saved real-time)`);
-      console.log(`❌ Dead: ${this.stats.totalDead}`);
+      console.log(`✅ Working: ${this.stats.totalWorking} (logged real-time)`);
+      console.log(`❌ Dead: ${this.stats.totalDead} (logged real-time)`);
       console.log(`📊 Success Rate: ${((this.stats.totalWorking / this.stats.totalTested) * 100).toFixed(2)}%`);
       console.log(`⏱️ Duration: ${duration}s`);
       
@@ -488,7 +524,7 @@ class GitHubProxyTester {
       console.log(`   - ${this.workingProxiesFile} (working proxies list)`);
       console.log(`   - ${this.workingLogFile} (working proxies detailed log)`);
       console.log(`   - ${this.deadLogFile} (dead proxies detailed log)`);
-      console.log(`   - live_testing.log (EVERY SINGLE PROXY - real-time)`);
+      console.log(`   - ${this.liveLogFile} (EVERY SINGLE PROXY - real-time)`);
       console.log(`   - stats.json (complete statistics)`);
       console.log('='.repeat(60));
       
@@ -497,11 +533,10 @@ class GitHubProxyTester {
       throw error;
     }
   }
-  }
 
   async run() {
     try {
-      this.log("🚀 Starting GitHub Proxy Tester...");
+      this.log("🚀 Starting GitHub Proxy Tester - SUPER REAL-TIME MODE...");
       
       // Step 1: Fetch all proxies
       await this.fetchProxies();
@@ -510,10 +545,10 @@ class GitHubProxyTester {
         throw new Error("No proxies fetched from any source!");
       }
       
-      // Step 2: Test all proxies
+      // Step 2: Test all proxies with super real-time logging
       await this.testAllProxies();
       
-      // Step 3: Save results
+      // Step 3: Save final results
       await this.saveResults();
       
       this.log("✅ GitHub Proxy Tester completed successfully!");
