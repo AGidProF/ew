@@ -1,9 +1,11 @@
-// proxy-tester.js - Fixed Version (Real-time hasil.txt updates)
+// proxy-tester.js - Simple & Guaranteed Working Version
 const axios = require("axios");
 const { HttpsProxyAgent } = require("https-proxy-agent");
 const fs = require("fs").promises;
 
-// Proxy sources - Updated working URLs
+console.log("🚀 Starting Simple Proxy Tester for GitHub Actions...");
+
+// Proxy sources
 const proxySources = [
   "https://api.proxyscrape.com/v2/?request=get&protocol=http&timeout=10000&format=textplain",
   "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
@@ -14,32 +16,20 @@ const proxySources = [
   "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/proxies.txt"
 ];
 
-// Test URLs yang lebih reliable
+// Test URLs - simple and fast
 const testUrls = [
   "https://httpbin.org/ip",
-  "https://api.ipify.org?format=json",
-  "https://ifconfig.me/ip"
+  "https://otakudesu.best/anime/watanare-sub-indo"
 ];
 
-class GitHubProxyTester {
+class SimpleProxyTester {
   constructor() {
-    this.allProxies = new Set();
     this.workingProxies = [];
-    this.deadProxies = [];
-    this.workingProxiesFile = 'hasil.txt';
-    this.workingLogFile = 'working_proxies.log';
-    this.deadLogFile = 'dead_proxies.log';
-    this.liveLogFile = 'live_testing.log';
-    this.tempResultsFile = 'temp_working.txt'; // Temporary file for real-time updates
-    this.stats = {
-      totalFetched: 0,
-      totalTested: 0,
-      totalWorking: 0,
-      totalDead: 0,
-      startTime: new Date(),
-      endTime: null,
-      errors: [],
-      sources: {}
+    this.allProxies = new Set();
+    this.results = {
+      tested: 0,
+      working: 0,
+      startTime: new Date()
     };
   }
 
@@ -48,630 +38,256 @@ class GitHubProxyTester {
     console.log(`[${timestamp}] ${message}`);
   }
 
-  async initializeResultFiles() {
-    try {
-      // Initialize hasil.txt with header but keep it ready for immediate updates
-      const initialHeader = `# Working Proxies - Real-time Updates
-# Started at: ${new Date().toISOString()}
-# Format: proxy (updated in real-time)
-
-`;
-      await fs.writeFile(this.workingProxiesFile, initialHeader);
-      
-      await fs.writeFile(this.workingLogFile, '# Working Proxies Log - Started at ' + new Date().toISOString() + '\n');
-      await fs.writeFile(this.deadLogFile, '# Dead Proxies Log - Started at ' + new Date().toISOString() + '\n');
-      await fs.writeFile(this.liveLogFile, '# COMPREHENSIVE REAL-TIME LOG - Every Proxy Test\n# Started at ' + new Date().toISOString() + '\n# Format: [timestamp] status: proxy | response_time | test_url | details\n\n');
-      await fs.writeFile(this.tempResultsFile, ''); // Empty temp file
-      
-      this.log("📄 Initialized all result files");
-    } catch (error) {
-      this.log(`❌ Error initializing files: ${error.message}`);
-    }
-  }
-
-  async logEveryProxyTest(proxyData) {
-    try {
-      const status = proxyData.success ? '✅ WORKING' : '❌ DEAD';
-      const emoji = proxyData.success ? '🟢' : '🔴';
-      
-      // Enhanced live log with more details
-      let liveLogLine;
-      if (proxyData.success) {
-        liveLogLine = `[${new Date().toISOString()}] ${emoji} ${status}: ${proxyData.proxy} | ${proxyData.responseTime}ms | via ${proxyData.testUrl} | size: ${proxyData.responseSize || 'N/A'}b | attempt: ${proxyData.attempt || 1} | speed: ${this.getSpeedCategory(proxyData.responseTime)}\n`;
-      } else {
-        liveLogLine = `[${new Date().toISOString()}] ${emoji} ${status}: ${proxyData.proxy} | ${proxyData.responseTime}ms | via ${proxyData.testUrl || 'N/A'} | attempts: ${proxyData.attempts || 1} | error: ${proxyData.error || 'timeout'}\n`;
-      }
-      
-      await fs.appendFile(this.liveLogFile, liveLogLine);
-      
-      // Enhanced console output with more info
-      let consoleMsg;
-      if (proxyData.success) {
-        consoleMsg = `🟢 WORKING: ${proxyData.proxy} (${proxyData.responseTime}ms) [${this.getSpeedCategory(proxyData.responseTime)}] via ${proxyData.testUrl} - Size: ${proxyData.responseSize || 'N/A'}b`;
-      } else {
-        consoleMsg = `🔴 DEAD: ${proxyData.proxy} (${proxyData.responseTime}ms) via ${proxyData.testUrl || 'multiple'} - ${proxyData.error || 'timeout'}`;
-      }
-      
-      this.log(consoleMsg);
-      
-    } catch (error) {
-      // Silent fail to not interrupt main flow
-      console.log(`Log error for ${proxyData.proxy}: ${error.message}`);
-    }
-  }
-
-  async appendWorkingProxyRealTime(proxyData) {
-    try {
-      // IMMEDIATELY append to hasil.txt - this is the key fix!
-      const proxyLine = `${proxyData.proxy}\n`;
-      await fs.appendFile(this.workingProxiesFile, proxyLine);
-      
-      // Also append to temp file for backup
-      await fs.appendFile(this.tempResultsFile, proxyLine);
-      
-      // Log to working log
-      const logLine = `[${new Date().toISOString()}] ✅ WORKING: ${proxyData.proxy} | ${proxyData.responseTime}ms | via ${proxyData.testUrl} | speed: ${this.getSpeedCategory(proxyData.responseTime)}\n`;
-      await fs.appendFile(this.workingLogFile, logLine);
-      
-      // Force file system sync (important for GitHub Actions)
-      try {
-        const fd = await fs.open(this.workingProxiesFile, 'r+');
-        await fd.sync();
-        await fd.close();
-      } catch (syncError) {
-        // Silent fail if sync not supported
-      }
-      
-      // GitHub Actions specific: Ensure file is visible
-      this.log(`💾 SAVED TO hasil.txt: ${proxyData.proxy} (${this.workingProxies.length + 1} total working)`);
-      
-    } catch (error) {
-      this.log(`❌ Error saving working proxy: ${error.message}`);
-      
-      // Multiple fallback mechanisms for GitHub Actions
-      const fallbackMethods = [
-        async () => await fs.appendFile('backup_working.txt', `${proxyData.proxy}\n`),
-        async () => await fs.appendFile('emergency_results.txt', `${proxyData.proxy}\n`),
-        async () => await fs.appendFile(`hasil_${Date.now()}.txt`, `${proxyData.proxy}\n`),
-      ];
-      
-      for (const fallback of fallbackMethods) {
-        try {
-          await fallback();
-          this.log(`✅ Saved to fallback location: ${proxyData.proxy}`);
-          break;
-        } catch (fallbackError) {
-          // Continue to next fallback
-        }
-      }
-      
-      // Ultimate fallback: environment variable (GitHub Actions can capture this)
-      console.log(`::notice title=Working Proxy Found::${proxyData.proxy} (${proxyData.responseTime}ms)`);
-    }
-  }
-
-  async appendDeadProxy(proxyData) {
-    try {
-      const logLine = `[${new Date().toISOString()}] ❌ DEAD: ${proxyData.proxy} | ${proxyData.responseTime}ms | error: ${proxyData.error || 'timeout'} | test_url: ${proxyData.testUrl || 'N/A'}\n`;
-      await fs.appendFile(this.deadLogFile, logLine);
-    } catch (error) {
-      // Silent fail
-    }
-  }
-
-  getSpeedCategory(responseTime) {
-    if (responseTime < 1000) return 'FAST';
-    if (responseTime < 3000) return 'MEDIUM';
-    if (responseTime < 5000) return 'SLOW';
-    return 'VERY_SLOW';
-  }
-
-  getSpeedDistribution() {
-    if (this.workingProxies.length === 0) return 'No working proxies yet';
-    
-    const distribution = {
-      FAST: 0,
-      MEDIUM: 0, 
-      SLOW: 0,
-      VERY_SLOW: 0
-    };
-    
-    this.workingProxies.forEach(proxy => {
-      const category = this.getSpeedCategory(proxy.responseTime);
-      distribution[category]++;
-    });
-    
-    return `Fast: ${distribution.FAST}, Medium: ${distribution.MEDIUM}, Slow: ${distribution.SLOW}, Very Slow: ${distribution.VERY_SLOW}`;
-  }
-
   async fetchProxies() {
-    this.log("🔄 Fetching proxies from all sources...");
+    this.log("📡 Fetching proxies from sources...");
     
-    const fetchPromises = proxySources.map(async (url, index) => {
+    for (let i = 0; i < proxySources.length; i++) {
       try {
-        this.log(`📡 Fetching from source ${index + 1}/${proxySources.length}: ${url.split('/')[2]}`);
+        this.log(`📥 Fetching source ${i + 1}/${proxySources.length}...`);
         
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 30000);
-        
-        const res = await axios.get(url, {
-          timeout: 30000,
-          maxRedirects: 5,
-          signal: controller.signal,
+        const response = await axios.get(proxySources[i], {
+          timeout: 20000,
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'text/plain, text/html, application/json, */*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache'
-          },
-          validateStatus: function (status) {
-            return status >= 200 && status < 400;
+            'User-Agent': 'Mozilla/5.0 (compatible; ProxyTester/1.0)'
           }
         });
         
-        clearTimeout(timeoutId);
-        
-        let proxies = [];
-        const sourceName = url.split('/')[2];
-        
-        if (typeof res.data === 'string') {
-          proxies = res.data
+        if (response.data) {
+          const proxies = response.data
+            .toString()
             .split(/[\r\n]+/)
-            .map(line => {
-              let cleaned = line.trim();
-              cleaned = cleaned.replace(/^https?:\/\//, "");
-              cleaned = cleaned.split(/[\s#]/)[0];
-              return cleaned;
-            })
-            .filter(line => {
-              return line && /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5}$/.test(line);
-            });
+            .map(line => line.trim())
+            .filter(line => /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5}$/.test(line));
+          
+          let newCount = 0;
+          proxies.forEach(proxy => {
+            if (!this.allProxies.has(proxy)) {
+              this.allProxies.add(proxy);
+              newCount++;
+            }
+          });
+          
+          this.log(`✅ Source ${i + 1}: Found ${proxies.length} proxies (${newCount} new)`);
         }
-        
-        let newCount = 0;
-        proxies.forEach(proxy => {
-          if (!this.allProxies.has(proxy)) {
-            this.allProxies.add(proxy);
-            newCount++;
-          }
-        });
-        
-        this.stats.sources[sourceName] = {
-          total: proxies.length,
-          new: newCount,
-          status: 'success'
-        };
-        
-        this.log(`✅ Source ${index + 1}: ${proxies.length} proxies (${newCount} new)`);
-        return newCount;
-        
       } catch (error) {
-        const sourceName = url.split('/')[2];
-        this.stats.sources[sourceName] = {
-          total: 0,
-          new: 0,
-          status: 'failed',
-          error: error.message.substring(0, 100)
-        };
-        
-        this.stats.errors.push(`Source ${index + 1} (${sourceName}): ${error.message}`);
-        this.log(`❌ Source ${index + 1} failed: ${error.message.substring(0, 100)}`);
-        return 0;
+        this.log(`❌ Source ${i + 1} failed: ${error.message.substring(0, 50)}`);
       }
-    });
-    
-    try {
-      const results = await Promise.allSettled(fetchPromises);
-      const totalNew = results.reduce((sum, result) => {
-        return sum + (result.status === 'fulfilled' ? result.value : 0);
-      }, 0);
-      
-      this.stats.totalFetched = this.allProxies.size;
-      this.log(`📊 Fetch complete: ${this.allProxies.size} total proxies (${totalNew} new)`);
-      
-    } catch (error) {
-      this.stats.errors.push(`Fetch error: ${error.message}`);
-      this.log(`❌ Fetch error: ${error.message}`);
     }
+    
+    this.log(`📊 Total unique proxies collected: ${this.allProxies.size}`);
   }
 
-  async testProxy(proxy, testUrlIndex = 0) {
+  async testProxy(proxy) {
     const startTime = Date.now();
-    const maxRetries = testUrls.length;
     
-    for (let retry = 0; retry < maxRetries; retry++) {
+    for (const testUrl of testUrls) {
       try {
-        const testUrl = testUrls[(testUrlIndex + retry) % testUrls.length];
-        
         const agent = new HttpsProxyAgent(`http://${proxy}`);
         
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000); // Reduced timeout for faster testing
-        
-        const axiosConfig = {
-          timeout: 8000,
-          signal: controller.signal,
-          validateStatus: status => status === 200,
-          maxRedirects: 2,
+        const response = await axios.get(testUrl, {
+          timeout: 6000,
+          httpsAgent: agent,
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Cache-Control': 'no-cache'
-          }
-        };
+            'User-Agent': 'Mozilla/5.0 (compatible; ProxyTester/1.0)'
+          },
+          validateStatus: status => status === 200
+        });
         
-        if (testUrl.startsWith('https://')) {
-          axiosConfig.httpsAgent = agent;
-        } else {
-          axiosConfig.httpAgent = agent;
-        }
-        
-        const response = await axios.get(testUrl, axiosConfig);
-        
-        clearTimeout(timeoutId);
-        
-        if (response.data && response.status === 200) {
+        if (response.data) {
           const responseTime = Date.now() - startTime;
-          
-          const responseText = typeof response.data === 'string' 
-            ? response.data 
-            : JSON.stringify(response.data);
-            
-          // More lenient validation for working proxies
-          const hasValidData = responseText.match(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/) || 
-                              responseText.includes('origin') ||
-                              responseText.includes('ip') ||
-                              responseText.length > 10;
-            
-          if (hasValidData) {
-            return { 
-              proxy, 
-              success: true, 
-              responseTime, 
-              testUrl: new URL(testUrl).hostname,
-              attempt: retry + 1,
-              responseSize: responseText.length
-            };
-          }
+          return { success: true, responseTime, testUrl };
         }
       } catch (error) {
-        const errorType = error.code || error.response?.status || 'UNKNOWN';
-        
-        if (retry === maxRetries - 1) {
-          return { 
-            proxy, 
-            success: false, 
-            responseTime: Date.now() - startTime,
-            error: `${errorType}: ${error.message.substring(0, 50)}`,
-            attempts: retry + 1,
-            testUrl: testUrls[(testUrlIndex + retry) % testUrls.length].split('/')[2]
-          };
-        }
+        // Continue to next test URL
       }
     }
     
-    return { 
-      proxy, 
-      success: false, 
-      responseTime: Date.now() - startTime,
-      attempts: maxRetries,
-      error: 'All test URLs failed',
-      testUrl: 'multiple'
-    };
+    return { success: false, responseTime: Date.now() - startTime };
+  }
+
+  async saveWorkingProxy(proxy, testResult) {
+    try {
+      // IMMEDIATELY save to hasil.txt
+      await fs.appendFile('hasil.txt', `${proxy}\n`);
+      
+      // Also save detailed info
+      const logEntry = `[${new Date().toISOString()}] ✅ ${proxy} | ${testResult.responseTime}ms | via ${testResult.testUrl}\n`;
+      await fs.appendFile('working_proxies.log', logEntry);
+      
+      this.log(`🟢 WORKING: ${proxy} (${testResult.responseTime}ms) - SAVED TO hasil.txt`);
+      
+    } catch (error) {
+      this.log(`❌ Error saving ${proxy}: ${error.message}`);
+      
+      // Fallback saves
+      try {
+        await fs.appendFile('backup_hasil.txt', `${proxy}\n`);
+        this.log(`💾 Saved to backup: ${proxy}`);
+      } catch (backupError) {
+        console.log(`EMERGENCY PROXY: ${proxy}`);
+      }
+    }
   }
 
   async testAllProxies() {
-    const proxiesToTest = Array.from(this.allProxies);
+    const proxiesList = Array.from(this.allProxies);
     
-    if (proxiesToTest.length === 0) {
+    if (proxiesList.length === 0) {
       this.log("❌ No proxies to test!");
       return;
     }
     
-    await this.initializeResultFiles();
+    // Initialize hasil.txt with header
+    const header = `# Working Proxies - Auto-generated by GitHub Actions
+# Generated: ${new Date().toISOString()}
+# Repository: GitHub Actions Proxy Tester
+
+`;
+    await fs.writeFile('hasil.txt', header);
+    await fs.writeFile('working_proxies.log', `# Working Proxies Log - ${new Date().toISOString()}\n`);
     
-    this.log(`🧪 Starting to test ${proxiesToTest.length} proxies...`);
-    this.log(`🔥 REAL-TIME MODE: Working proxies are IMMEDIATELY written to ${this.workingProxiesFile}!`);
+    this.log(`🧪 Testing ${proxiesList.length} proxies...`);
     
-    // Optimized settings for GitHub Actions
-    const batchSize = 50;
-    const concurrency = 15;
+    // Test in smaller batches for better performance
+    const batchSize = 20;
+    const concurrency = 8;
     
-    let totalTested = 0;
-    let workingCount = 0;
-    
-    for (let i = 0; i < proxiesToTest.length; i += batchSize) {
-      const batch = proxiesToTest.slice(i, i + batchSize);
-      const batchNumber = Math.floor(i / batchSize) + 1;
-      const totalBatches = Math.ceil(proxiesToTest.length / batchSize);
+    for (let i = 0; i < proxiesList.length; i += batchSize) {
+      const batch = proxiesList.slice(i, i + batchSize);
+      const batchNum = Math.floor(i / batchSize) + 1;
+      const totalBatches = Math.ceil(proxiesList.length / batchSize);
       
-      this.log(`🔄 Testing batch ${batchNumber}/${totalBatches} (${batch.length} proxies)`);
+      this.log(`🔄 Testing batch ${batchNum}/${totalBatches} (${batch.length} proxies)`);
       
-      const batchPromises = [];
-      
+      // Process batch with limited concurrency
       for (let j = 0; j < batch.length; j += concurrency) {
         const concurrent = batch.slice(j, j + concurrency);
         
-        const concurrentPromises = concurrent.map((proxy, idx) => 
-          this.testProxy(proxy, (i + j + idx) % testUrls.length)
-        );
-        
-        batchPromises.push(Promise.allSettled(concurrentPromises));
-      }
-      
-      const batchResults = await Promise.all(batchPromises);
-      
-      let batchWorking = 0;
-      for (const concurrentResults of batchResults) {
-        for (const result of concurrentResults) {
-          if (result.status === 'fulfilled') {
-            const testResult = result.value;
-            totalTested++;
-            
-            if (testResult.success) {
-              const workingProxy = {
-                proxy: testResult.proxy,
-                responseTime: testResult.responseTime,
-                testUrl: testResult.testUrl,
-                testedAt: new Date().toISOString(),
-                attempt: testResult.attempt,
-                responseSize: testResult.responseSize
-              };
-              
-              this.workingProxies.push(workingProxy);
-              
-              // KEY FIX: Immediately write to hasil.txt
-              await this.appendWorkingProxyRealTime(workingProxy);
-              await this.logEveryProxyTest(workingProxy);
-              
-              batchWorking++;
-              workingCount++;
-              
-            } else {
-              const deadProxy = {
-                proxy: testResult.proxy,
-                responseTime: testResult.responseTime,
-                error: testResult.error,
-                attempts: testResult.attempts,
-                testUrl: testResult.testUrl,
-                testedAt: new Date().toISOString()
-              };
-              
-              this.deadProxies.push(deadProxy);
-              await this.logEveryProxyTest(deadProxy);
-              await this.appendDeadProxy(deadProxy);
-            }
+        const promises = concurrent.map(async (proxy) => {
+          this.results.tested++;
+          const result = await this.testProxy(proxy);
+          
+          if (result.success) {
+            this.results.working++;
+            this.workingProxies.push({ proxy, ...result });
+            await this.saveWorkingProxy(proxy, result);
+          } else {
+            this.log(`🔴 DEAD: ${proxy} (${result.responseTime}ms)`);
           }
-        }
+        });
+        
+        await Promise.allSettled(promises);
       }
       
-      const progress = ((totalTested / proxiesToTest.length) * 100).toFixed(1);
+      const progress = ((this.results.tested / proxiesList.length) * 100).toFixed(1);
+      this.log(`📊 Batch ${batchNum}/${totalBatches} complete | Working: ${this.results.working} | Progress: ${progress}%`);
       
-      const batchSummary = `📊 BATCH ${batchNumber}/${totalBatches} COMPLETED | Working: ${batchWorking}/${batch.length} (${((batchWorking/batch.length)*100).toFixed(1)}%) | Progress: ${progress}% | Total Working: ${workingCount}/${totalTested}`;
-      this.log(batchSummary);
-      
-      // Enhanced batch logging with working proxy details
-      const batchLogDetails = `
-[${new Date().toISOString()}] ${batchSummary}
-[${new Date().toISOString()}] 📈 Batch Stats: ${batchWorking} working, ${batch.length - batchWorking} dead
-[${new Date().toISOString()}] 📊 Overall Stats: ${workingCount} working out of ${totalTested} tested (${((workingCount/totalTested)*100).toFixed(2)}% success rate)
-[${new Date().toISOString()}] ⚡ Speed Distribution: ${this.getSpeedDistribution()}
-
-`;
-      
-      await fs.appendFile(this.liveLogFile, batchLogDetails);
-      
-      // Shorter delay for faster completion
-      if (i + batchSize < proxiesToTest.length) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
+      // Small delay between batches
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
     
-    this.stats.totalTested = totalTested;
-    this.stats.totalWorking = this.workingProxies.length;
-    this.stats.totalDead = this.deadProxies.length;
-    
-    this.log(`🎯 Testing complete!`);
-    this.log(`📊 Final Results: ${this.workingProxies.length} working, ${this.deadProxies.length} dead out of ${totalTested} tested`);
-    this.log(`🏆 Success Rate: ${((this.stats.totalWorking / this.stats.totalTested) * 100).toFixed(2)}%`);
-    this.log(`⚡ Speed Distribution: ${this.getSpeedDistribution()}`);
-    
-    // Enhanced final log with detailed summary
-    const finalLogSummary = `
-# ===============================================
-# 🎯 TESTING COMPLETED at ${new Date().toISOString()}
-# ===============================================
-# 📊 FINAL RESULTS:
-# - Working Proxies: ${this.workingProxies.length}
-# - Dead Proxies: ${this.deadProxies.length}  
-# - Total Tested: ${totalTested}
-# - Success Rate: ${((this.stats.totalWorking / this.stats.totalTested) * 100).toFixed(2)}%
-# - Speed Distribution: ${this.getSpeedDistribution()}
-# 
-# 🏆 TOP 5 FASTEST WORKING PROXIES:
-${this.workingProxies
-  .sort((a, b) => a.responseTime - b.responseTime)
-  .slice(0, 5)
-  .map((p, i) => `# ${i + 1}. ${p.proxy} (${p.responseTime}ms) [${this.getSpeedCategory(p.responseTime)}]`)
-  .join('\n')}
-# ===============================================
-`;
-    
-    await fs.appendFile(this.liveLogFile, finalLogSummary);
+    this.log(`🎯 Testing complete! Found ${this.results.working} working proxies out of ${this.results.tested} tested`);
   }
 
   async finalizeResults() {
+    const duration = Math.round((Date.now() - this.results.startTime) / 1000);
+    
+    // Create final summary
+    const summary = {
+      summary: {
+        totalTested: this.results.tested,
+        totalWorking: this.results.working,
+        successRate: ((this.results.working / this.results.tested) * 100).toFixed(2) + '%',
+        duration: duration + 's'
+      },
+      timestamp: new Date().toISOString(),
+      topProxies: this.workingProxies
+        .sort((a, b) => a.responseTime - b.responseTime)
+        .slice(0, 5)
+        .map(p => ({ proxy: p.proxy, responseTime: p.responseTime }))
+    };
+    
+    await fs.writeFile('stats.json', JSON.stringify(summary, null, 2));
+    
+    // Ensure hasil.txt has content or create emergency version
     try {
-      this.stats.endTime = new Date();
-      const duration = Math.round((this.stats.endTime - this.stats.startTime) / 1000);
+      const hasilContent = await fs.readFile('hasil.txt', 'utf8');
+      const proxyCount = (hasilContent.match(/^\d+\.\d+\.\d+\.\d+:\d+$/gm) || []).length;
       
-      // Read current hasil.txt content
-      let currentContent = '';
-      try {
-        currentContent = await fs.readFile(this.workingProxiesFile, 'utf8');
-      } catch (error) {
-        this.log(`⚠️ Could not read current hasil.txt: ${error.message}`);
-        currentContent = '';
+      if (proxyCount === 0 && this.workingProxies.length > 0) {
+        this.log("🚨 hasil.txt is empty, recreating...");
+        const workingList = this.workingProxies.map(p => p.proxy).join('\n');
+        await fs.writeFile('hasil.txt', `# Working Proxies\n# Total: ${this.workingProxies.length}\n\n${workingList}\n`);
       }
       
-      // Extract just the proxy IPs (remove headers and comments)
-      const proxyLines = currentContent
-        .split('\n')
-        .filter(line => line.trim() && !line.startsWith('#'))
-        .filter(line => /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5}$/.test(line.trim()));
-      
-      // Sort working proxies by response time and create final header
-      this.workingProxies.sort((a, b) => a.responseTime - b.responseTime);
-      
-      const finalHeader = `# Working Proxies - Final Results
-# Total Working: ${this.workingProxies.length}
-# Total Tested: ${this.stats.totalTested}
-# Success Rate: ${((this.stats.totalWorking / this.stats.totalTested) * 100).toFixed(2)}%
-# Duration: ${duration}s
-# Generated: ${new Date().toISOString()}
-# Sorted by: Response time (fastest first)
-
-`;
-      
-      // Use the proxies that were already written (real-time) or fallback to our array
-      let finalProxyList;
-      if (proxyLines.length === this.workingProxies.length) {
-        // Real-time writing worked perfectly
-        const sortedProxiesBySpeed = this.workingProxies
-          .sort((a, b) => a.responseTime - b.responseTime)
-          .map(p => p.proxy);
-        finalProxyList = sortedProxiesBySpeed.join('\n');
-      } else {
-        // Fallback: use the proxies we found during real-time testing
-        finalProxyList = proxyLines.join('\n');
-      }
-      
-      // Write final hasil.txt with sorted results and proper header
-      await fs.writeFile(this.workingProxiesFile, finalHeader + finalProxyList + '\n');
-      
-      // Generate comprehensive stats
-      const statsData = {
-        summary: {
-          totalFetched: this.stats.totalFetched,
-          totalTested: this.stats.totalTested,
-          totalWorking: this.stats.totalWorking,
-          totalDead: this.stats.totalDead,
-          successRate: ((this.stats.totalWorking / this.stats.totalTested) * 100).toFixed(2) + '%',
-          duration: duration + 's'
-        },
-        timing: {
-          startTime: this.stats.startTime,
-          endTime: this.stats.endTime,
-          durationSeconds: duration
-        },
-        files: {
-          workingProxies: this.workingProxiesFile,
-          workingLog: this.workingLogFile,
-          deadLog: this.deadLogFile,
-          liveLog: this.liveLogFile,
-          stats: 'stats.json'
-        },
-        sources: this.stats.sources,
-        topWorkingProxies: this.workingProxies.slice(0, 10),
-        errors: this.stats.errors,
-        lastUpdate: new Date().toISOString()
-      };
-      
-      await fs.writeFile('stats.json', JSON.stringify(statsData, null, 2));
-      
-      this.log(`💾 Results finalized successfully`);
-      this.log(`⏱️ Total execution time: ${duration} seconds`);
-      
-      // Clean up temp file
-      try {
-        await fs.unlink(this.tempResultsFile);
-      } catch (error) {
-        // Silent fail
-      }
-      
-      console.log('\n' + '='.repeat(60));
-      console.log('🎯 PROXY TESTING SUMMARY');
-      console.log('='.repeat(60));
-      console.log(`📡 Total Fetched: ${this.stats.totalFetched}`);
-      console.log(`🧪 Total Tested: ${this.stats.totalTested}`);
-      console.log(`✅ Working: ${this.stats.totalWorking}`);
-      console.log(`❌ Dead: ${this.stats.totalDead}`);
-      console.log(`📊 Success Rate: ${((this.stats.totalWorking / this.stats.totalTested) * 100).toFixed(2)}%`);
-      console.log(`⏱️ Duration: ${duration}s`);
-      
-      if (this.workingProxies.length > 0) {
-        console.log(`🏆 Fastest Proxy: ${this.workingProxies[0].proxy} (${this.workingProxies[0].responseTime}ms)`);
-      }
-      console.log(`📄 Results saved to: ${this.workingProxiesFile}`);
-      console.log('='.repeat(60));
+      this.log(`✅ hasil.txt contains ${proxyCount} working proxies`);
       
     } catch (error) {
-      this.log(`❌ Finalize error: ${error.message}`);
-      throw error;
+      this.log(`⚠️ Error checking hasil.txt: ${error.message}`);
+      
+      // Emergency recreation
+      if (this.workingProxies.length > 0) {
+        const emergencyList = this.workingProxies.map(p => p.proxy).join('\n');
+        await fs.writeFile('hasil.txt', `# Emergency Recovery\n# Total: ${this.workingProxies.length}\n\n${emergencyList}\n`);
+        this.log(`🚨 Emergency hasil.txt created with ${this.workingProxies.length} proxies`);
+      }
     }
+    
+    // Final verification
+    try {
+      const files = await fs.readdir('.');
+      const resultFiles = files.filter(f => f.endsWith('.txt') || f.endsWith('.log') || f.endsWith('.json'));
+      this.log(`📁 Generated files: ${resultFiles.join(', ')}`);
+      
+      for (const file of resultFiles) {
+        const stats = await fs.stat(file);
+        this.log(`📄 ${file}: ${stats.size} bytes`);
+      }
+    } catch (error) {
+      this.log(`⚠️ File verification error: ${error.message}`);
+    }
+    
+    console.log('\n' + '='.repeat(50));
+    console.log('🎯 FINAL SUMMARY');
+    console.log('='.repeat(50));
+    console.log(`✅ Working Proxies: ${this.results.working}`);
+    console.log(`🧪 Total Tested: ${this.results.tested}`);
+    console.log(`📊 Success Rate: ${((this.results.working / this.results.tested) * 100).toFixed(2)}%`);
+    console.log(`⏱️ Duration: ${duration}s`);
+    console.log(`📄 Results saved to: hasil.txt`);
+    console.log('='.repeat(50));
   }
 
   async run() {
     try {
-      this.log("🚀 Starting Enhanced Real-time Proxy Tester...");
-      
       await this.fetchProxies();
-      
-      if (this.allProxies.size === 0) {
-        throw new Error("No proxies fetched from any source!");
-      }
-      
       await this.testAllProxies();
       await this.finalizeResults();
       
-      this.log("✅ Proxy testing completed successfully!");
-      this.log(`📄 Check your results in: ${this.workingProxiesFile}`);
+      this.log("🎉 Proxy testing completed successfully!");
       
     } catch (error) {
       this.log(`❌ Fatal error: ${error.message}`);
       
-      try {
-        const errorStats = {
-          error: true,
-          message: error.message,
-          partialResults: {
-            fetched: this.stats.totalFetched,
-            tested: this.stats.totalTested,
-            working: this.workingProxies.length
-          },
-          timestamp: new Date().toISOString()
-        };
-        
-        await fs.writeFile('stats.json', JSON.stringify(errorStats, null, 2));
-        
-        // Ensure we save any working proxies we found before the error
-        if (this.workingProxies.length > 0) {
-          const workingList = this.workingProxies.map(p => p.proxy).join('\n');
-          await fs.writeFile(this.workingProxiesFile, 
-            `# Partial results due to error: ${error.message}\n# Found ${this.workingProxies.length} working proxies before error\n\n` + 
-            workingList + '\n'
-          );
-          this.log(`💾 Saved ${this.workingProxies.length} working proxies despite error`);
-        } else {
-          await fs.writeFile(this.workingProxiesFile, '# No working proxies found due to error\n# Error: ' + error.message + '\n');
-        }
-      } catch (saveError) {
-        this.log(`❌ Could not save error info: ${saveError.message}`);
+      // Emergency save what we have
+      if (this.workingProxies.length > 0) {
+        const emergencyList = this.workingProxies.map(p => p.proxy).join('\n');
+        await fs.writeFile('hasil.txt', `# Error Recovery - ${error.message}\n\n${emergencyList}\n`);
+        this.log(`🚨 Saved ${this.workingProxies.length} proxies despite error`);
       }
       
-      process.exit(1);
+      throw error;
     }
   }
 }
 
-// Main execution
+// Run the tester
 if (require.main === module) {
-  const tester = new GitHubProxyTester();
-  tester.run();
+  const tester = new SimpleProxyTester();
+  tester.run().catch(error => {
+    console.error('Fatal error:', error.message);
+    process.exit(1);
+  });
 }
 
-module.exports = GitHubProxyTester;
+module.exports = SimpleProxyTester;
