@@ -1,0 +1,68 @@
+# .github/workflows/proxy-tester.yml
+name: Proxy Tester
+
+on:
+  schedule:
+    # Jalankan setiap 3 jam (optimal untuk free tier)
+    - cron: '0 */3 * * *'
+    # Alternative: 4x sehari - cron: '0 6,12,18,0 * * *'
+  # Manual trigger
+  workflow_dispatch:
+  # Jalankan saat push ke main
+  push:
+    branches: [ main ]
+
+jobs:
+  test-proxies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50  # Timeout 50 menit untuk safety
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        
+    - name: Install dependencies
+      run: |
+        npm install axios https-proxy-agent
+        
+    - name: Run proxy tester
+      run: node proxy-tester.js
+      
+    - name: Commit and push hasil.txt
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        # Add all result files
+        git add hasil.txt stats.json working_proxies.log dead_proxies.log live_testing.log
+        
+        # Check if there are changes
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          # Get working proxy count for commit message
+          WORKING_COUNT=$(grep -c "^[0-9]" hasil.txt || echo "0")
+          git commit -m "Update proxy list: ${WORKING_COUNT} working proxies - $(date '+%Y-%m-%d %H:%M:%S UTC')"
+          git push
+        fi
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: proxy-results
+        path: |
+          hasil.txt
+          stats.json
+          working_proxies.log
+          dead_proxies.log
+          live_testing.log
+        retention-days: 7
