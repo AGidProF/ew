@@ -1,25 +1,17 @@
 {
   "name": "github-proxy-tester",
   "version": "1.0.0",
-  "description": "Automated proxy tester that runs on GitHub Actions",
+  "description": "Automated proxy tester for GitHub Actions",
   "main": "proxy-tester.js",
   "scripts": {
-    "test": "node proxy-tester.js",
-    "start": "node proxy-tester.js"
+    "start": "node proxy-tester.js",
+    "test": "node proxy-tester.js"
   },
-  "keywords": [
-    "proxy",
-    "tester",
-    "github-actions",
-    "automation"
-  ],
-  "author": "GitHub Actions",
-  "license": "MIT",
   "dependencies": {
-    "axios": "^1.6.0",
-    "https-proxy-agent": "^7.0.0"
+    "axios": "^1.6.2",
+    "https-proxy-agent": "^7.0.2"
   },
-  "engines": {
-    "node": ">=16.0.0"
-  }
+  "keywords": ["proxy", "tester", "github-actions"],
+  "author": "GitHub Actions",
+  "license": "MIT"
 }
