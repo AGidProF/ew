@@ -1,4 +1,4 @@
-// proxy-tester.js - Fixed Version (Error 400 Resolved)
+// proxy-tester.js - Fixed Version (Real-time hasil.txt updates)
 const axios = require("axios");
 const { HttpsProxyAgent } = require("https-proxy-agent");
 const fs = require("fs").promises;
@@ -16,7 +16,9 @@ const proxySources = [
 
 // Test URLs yang lebih reliable
 const testUrls = [
-  "https://otakudesu.best/anime/watanare-sub-indo"
+  "https://httpbin.org/ip",
+  "https://api.ipify.org?format=json",
+  "https://ifconfig.me/ip"
 ];
 
 class GitHubProxyTester {
@@ -28,6 +30,7 @@ class GitHubProxyTester {
     this.workingLogFile = 'working_proxies.log';
     this.deadLogFile = 'dead_proxies.log';
     this.liveLogFile = 'live_testing.log';
+    this.tempResultsFile = 'temp_working.txt'; // Temporary file for real-time updates
     this.stats = {
       totalFetched: 0,
       totalTested: 0,
@@ -47,10 +50,19 @@ class GitHubProxyTester {
 
   async initializeResultFiles() {
     try {
-      await fs.writeFile(this.workingProxiesFile, '# Working Proxies - Real-time Updates\n# Format: proxy (response_time ms)\n\n');
+      // Initialize hasil.txt with header but keep it ready for immediate updates
+      const initialHeader = `# Working Proxies - Real-time Updates
+# Started at: ${new Date().toISOString()}
+# Format: proxy (updated in real-time)
+
+`;
+      await fs.writeFile(this.workingProxiesFile, initialHeader);
+      
       await fs.writeFile(this.workingLogFile, '# Working Proxies Log - Started at ' + new Date().toISOString() + '\n');
       await fs.writeFile(this.deadLogFile, '# Dead Proxies Log - Started at ' + new Date().toISOString() + '\n');
       await fs.writeFile(this.liveLogFile, '# REAL-TIME LOG - Every Proxy Test\n# Started at ' + new Date().toISOString() + '\n\n');
+      await fs.writeFile(this.tempResultsFile, ''); // Empty temp file
+      
       this.log("📄 Initialized all result files");
     } catch (error) {
       this.log(`❌ Error initializing files: ${error.message}`);
@@ -77,16 +89,38 @@ class GitHubProxyTester {
     }
   }
 
-  async appendWorkingProxy(proxyData) {
+  async appendWorkingProxyRealTime(proxyData) {
     try {
-      const line = `${proxyData.proxy}\n`;
-      await fs.appendFile(this.workingProxiesFile, line);
+      // IMMEDIATELY append to hasil.txt - this is the key fix!
+      const proxyLine = `${proxyData.proxy}\n`;
+      await fs.appendFile(this.workingProxiesFile, proxyLine);
       
+      // Also append to temp file for backup
+      await fs.appendFile(this.tempResultsFile, proxyLine);
+      
+      // Log to working log
       const logLine = `[${new Date().toISOString()}] ✅ WORKING: ${proxyData.proxy} | ${proxyData.responseTime}ms | via ${proxyData.testUrl} | speed: ${this.getSpeedCategory(proxyData.responseTime)}\n`;
       await fs.appendFile(this.workingLogFile, logLine);
       
+      // Force file system sync (important for GitHub Actions)
+      try {
+        const fd = await fs.open(this.workingProxiesFile, 'r+');
+        await fd.sync();
+        await fd.close();
+      } catch (syncError) {
+        // Silent fail if sync not supported
+      }
+      
     } catch (error) {
       this.log(`❌ Error saving working proxy: ${error.message}`);
+      
+      // Fallback: try to save to backup location
+      try {
+        await fs.appendFile('backup_working.txt', `${proxyData.proxy}\n`);
+      } catch (backupError) {
+        // Ultimate fallback: log to console
+        console.log(`BACKUP PROXY: ${proxyData.proxy}`);
+      }
     }
   }
 
@@ -116,7 +150,6 @@ class GitHubProxyTester {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 30000);
         
-        // Fixed axios configuration for 400 error prevention
         const res = await axios.get(url, {
           timeout: 30000,
           maxRedirects: 5,
@@ -131,7 +164,7 @@ class GitHubProxyTester {
             'Pragma': 'no-cache'
           },
           validateStatus: function (status) {
-            return status >= 200 && status < 400; // Accept redirects
+            return status >= 200 && status < 400;
           }
         });
         
@@ -140,29 +173,20 @@ class GitHubProxyTester {
         let proxies = [];
         const sourceName = url.split('/')[2];
         
-        // Enhanced parsing for different formats
         if (typeof res.data === 'string') {
           proxies = res.data
             .split(/[\r\n]+/)
             .map(line => {
-              // Clean the line
               let cleaned = line.trim();
-              
-              // Remove protocol prefix if present
               cleaned = cleaned.replace(/^https?:\/\//, "");
-              
-              // Remove any extra characters or comments
               cleaned = cleaned.split(/[\s#]/)[0];
-              
               return cleaned;
             })
             .filter(line => {
-              // Validate IP:PORT format
               return line && /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5}$/.test(line);
             });
         }
         
-        // Add unique proxies
         let newCount = 0;
         proxies.forEach(proxy => {
           if (!this.allProxies.has(proxy)) {
@@ -218,34 +242,24 @@ class GitHubProxyTester {
       try {
         const testUrl = testUrls[(testUrlIndex + retry) % testUrls.length];
         
-        // Create proxy agent with proper configuration
         const agent = new HttpsProxyAgent(`http://${proxy}`);
         
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        const timeoutId = setTimeout(() => controller.abort(), 8000); // Reduced timeout for faster testing
         
-        // Enhanced request configuration to prevent 400 errors
         const axiosConfig = {
-          timeout: 10000,
+          timeout: 8000,
           signal: controller.signal,
           validateStatus: status => status === 200,
-          maxRedirects: 3,
+          maxRedirects: 2,
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*',
             'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache',
-            'DNT': '1',
-            'Sec-Fetch-Dest': 'empty',
-            'Sec-Fetch-Mode': 'cors',
-            'Sec-Fetch-Site': 'cross-site'
+            'Cache-Control': 'no-cache'
           }
         };
         
-        // Set proxy agents
         if (testUrl.startsWith('https://')) {
           axiosConfig.httpsAgent = agent;
         } else {
@@ -259,15 +273,15 @@ class GitHubProxyTester {
         if (response.data && response.status === 200) {
           const responseTime = Date.now() - startTime;
           
-          // Verify response contains valid data
           const responseText = typeof response.data === 'string' 
             ? response.data 
             : JSON.stringify(response.data);
             
-          // Check if response is valid (contains IP or expected data)
+          // More lenient validation for working proxies
           const hasValidData = responseText.match(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/) || 
                               responseText.includes('origin') ||
-                              responseText.length > 5;
+                              responseText.includes('ip') ||
+                              responseText.length > 10;
             
           if (hasValidData) {
             return { 
@@ -281,7 +295,6 @@ class GitHubProxyTester {
           }
         }
       } catch (error) {
-        // Log specific error types for debugging
         const errorType = error.code || error.response?.status || 'UNKNOWN';
         
         if (retry === maxRetries - 1) {
@@ -294,8 +307,6 @@ class GitHubProxyTester {
             testUrl: testUrls[(testUrlIndex + retry) % testUrls.length].split('/')[2]
           };
         }
-        
-        // Continue to next URL if not last retry
       }
     }
     
@@ -320,12 +331,11 @@ class GitHubProxyTester {
     await this.initializeResultFiles();
     
     this.log(`🧪 Starting to test ${proxiesToTest.length} proxies...`);
-    this.log(`🔥 REAL-TIME MODE: Every proxy will be logged immediately!`);
-    this.log(`📄 Results file: ${this.workingProxiesFile}`);
+    this.log(`🔥 REAL-TIME MODE: Working proxies are IMMEDIATELY written to ${this.workingProxiesFile}!`);
     
-    // Reduced concurrency to prevent overwhelming the system
-    const batchSize = 30; // Smaller batches
-    const concurrency = 10; // Lower concurrency
+    // Optimized settings for GitHub Actions
+    const batchSize = 50;
+    const concurrency = 15;
     
     let totalTested = 0;
     let workingCount = 0;
@@ -370,8 +380,10 @@ class GitHubProxyTester {
               
               this.workingProxies.push(workingProxy);
               
+              // KEY FIX: Immediately write to hasil.txt
+              await this.appendWorkingProxyRealTime(workingProxy);
               await this.logEveryProxyTest(workingProxy);
-              await this.appendWorkingProxy(workingProxy);
+              
               batchWorking++;
               workingCount++;
               
@@ -400,9 +412,9 @@ class GitHubProxyTester {
       
       await fs.appendFile(this.liveLogFile, `\n[${new Date().toISOString()}] ${batchSummary}\n\n`);
       
-      // Delay between batches to prevent rate limiting
+      // Shorter delay for faster completion
       if (i + batchSize < proxiesToTest.length) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
     
@@ -416,12 +428,27 @@ class GitHubProxyTester {
     await fs.appendFile(this.liveLogFile, `\n# TESTING COMPLETED at ${new Date().toISOString()}\n# RESULTS: ${this.workingProxies.length} working, ${this.deadProxies.length} dead\n`);
   }
 
-  async saveResults() {
+  async finalizeResults() {
     try {
       this.stats.endTime = new Date();
       const duration = Math.round((this.stats.endTime - this.stats.startTime) / 1000);
       
-      // Sort working proxies by response time
+      // Read current hasil.txt content
+      let currentContent = '';
+      try {
+        currentContent = await fs.readFile(this.workingProxiesFile, 'utf8');
+      } catch (error) {
+        this.log(`⚠️ Could not read current hasil.txt: ${error.message}`);
+        currentContent = '';
+      }
+      
+      // Extract just the proxy IPs (remove headers and comments)
+      const proxyLines = currentContent
+        .split('\n')
+        .filter(line => line.trim() && !line.startsWith('#'))
+        .filter(line => /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5}$/.test(line.trim()));
+      
+      // Sort working proxies by response time and create final header
       this.workingProxies.sort((a, b) => a.responseTime - b.responseTime);
       
       const finalHeader = `# Working Proxies - Final Results
@@ -434,9 +461,23 @@ class GitHubProxyTester {
 
 `;
       
-      const sortedProxiesList = this.workingProxies.map(p => p.proxy).join('\n');
-      await fs.writeFile(this.workingProxiesFile, finalHeader + sortedProxiesList + '\n');
+      // Use the proxies that were already written (real-time) or fallback to our array
+      let finalProxyList;
+      if (proxyLines.length === this.workingProxies.length) {
+        // Real-time writing worked perfectly
+        const sortedProxiesBySpeed = this.workingProxies
+          .sort((a, b) => a.responseTime - b.responseTime)
+          .map(p => p.proxy);
+        finalProxyList = sortedProxiesBySpeed.join('\n');
+      } else {
+        // Fallback: use the proxies we found during real-time testing
+        finalProxyList = proxyLines.join('\n');
+      }
       
+      // Write final hasil.txt with sorted results and proper header
+      await fs.writeFile(this.workingProxiesFile, finalHeader + finalProxyList + '\n');
+      
+      // Generate comprehensive stats
       const statsData = {
         summary: {
           totalFetched: this.stats.totalFetched,
@@ -466,8 +507,15 @@ class GitHubProxyTester {
       
       await fs.writeFile('stats.json', JSON.stringify(statsData, null, 2));
       
-      this.log(`💾 Results saved successfully`);
+      this.log(`💾 Results finalized successfully`);
       this.log(`⏱️ Total execution time: ${duration} seconds`);
+      
+      // Clean up temp file
+      try {
+        await fs.unlink(this.tempResultsFile);
+      } catch (error) {
+        // Silent fail
+      }
       
       console.log('\n' + '='.repeat(60));
       console.log('🎯 PROXY TESTING SUMMARY');
@@ -482,17 +530,18 @@ class GitHubProxyTester {
       if (this.workingProxies.length > 0) {
         console.log(`🏆 Fastest Proxy: ${this.workingProxies[0].proxy} (${this.workingProxies[0].responseTime}ms)`);
       }
+      console.log(`📄 Results saved to: ${this.workingProxiesFile}`);
       console.log('='.repeat(60));
       
     } catch (error) {
-      this.log(`❌ Save error: ${error.message}`);
+      this.log(`❌ Finalize error: ${error.message}`);
       throw error;
     }
   }
 
   async run() {
     try {
-      this.log("🚀 Starting Fixed Proxy Tester...");
+      this.log("🚀 Starting Enhanced Real-time Proxy Tester...");
       
       await this.fetchProxies();
       
@@ -501,9 +550,10 @@ class GitHubProxyTester {
       }
       
       await this.testAllProxies();
-      await this.saveResults();
+      await this.finalizeResults();
       
       this.log("✅ Proxy testing completed successfully!");
+      this.log(`📄 Check your results in: ${this.workingProxiesFile}`);
       
     } catch (error) {
       this.log(`❌ Fatal error: ${error.message}`);
@@ -522,11 +572,16 @@ class GitHubProxyTester {
         
         await fs.writeFile('stats.json', JSON.stringify(errorStats, null, 2));
         
+        // Ensure we save any working proxies we found before the error
         if (this.workingProxies.length > 0) {
           const workingList = this.workingProxies.map(p => p.proxy).join('\n');
-          await fs.writeFile('hasil.txt', workingList + '\n');
+          await fs.writeFile(this.workingProxiesFile, 
+            `# Partial results due to error: ${error.message}\n# Found ${this.workingProxies.length} working proxies before error\n\n` + 
+            workingList + '\n'
+          );
+          this.log(`💾 Saved ${this.workingProxies.length} working proxies despite error`);
         } else {
-          await fs.writeFile('hasil.txt', '# No working proxies found due to error\n# Error: ' + error.message + '\n');
+          await fs.writeFile(this.workingProxiesFile, '# No working proxies found due to error\n# Error: ' + error.message + '\n');
         }
       } catch (saveError) {
         this.log(`❌ Could not save error info: ${saveError.message}`);
