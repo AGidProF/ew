@@ -389,6 +389,7 @@ app.post("/restart-browser", async (req, res) => {
 app.get("/proxy", async (req, res) => {
   const startTime = Date.now();
   const targetUrl = req.query.url;
+  const noCache = req.query.nocache === 'true'; // NEW: Check for nocache parameter
   
   serverStats.totalRequests++;
   
@@ -398,9 +399,11 @@ app.get("/proxy", async (req, res) => {
   }
 
   const cacheKey = getCacheKey(targetUrl);
-  const cached = getCache(cacheKey);
   
-  if (cached) {
+  // NEW: Skip cache check if nocache=true
+  const cached = noCache ? null : getCache(cacheKey);
+  
+  if (cached && !noCache) {
     console.log(`⚡ [INSTANT CACHE HIT] ${targetUrl}`);
     serverStats.cacheHits++;
     const responseTime = Date.now() - startTime;
@@ -420,7 +423,13 @@ app.get("/proxy", async (req, res) => {
     return res.send(cached.html);
   }
 
-  console.log(`🔄 [CACHE MISS] Fetching: ${targetUrl}`);
+  // NEW: Log nocache usage
+  if (noCache) {
+    console.log(`🚫 [NO CACHE] Bypassing cache: ${targetUrl}`);
+  } else {
+    console.log(`🔄 [CACHE MISS] Fetching: ${targetUrl}`);
+  }
+  
   serverStats.cacheMisses++;
   
   if (!browserInstance || !browserInstance.isConnected()) {
@@ -445,7 +454,11 @@ app.get("/proxy", async (req, res) => {
     const html = await page.content();
     const responseTime = Date.now() - startTime;
 
-    saveCache(cacheKey, { html, url: finalUrl });
+    // NEW: Only save cache if nocache is not enabled
+    if (!noCache) {
+      saveCache(cacheKey, { html, url: finalUrl });
+    }
+    
     serverStats.totalResponseTime += responseTime;
 
     // Add to history
@@ -458,8 +471,15 @@ app.get("/proxy", async (req, res) => {
       timestamp: new Date().toLocaleString()
     });
 
-    console.log(`💾 [CACHED] ${targetUrl} (${responseTime}ms)`);
-    res.set('X-Cache', 'MISS');
+    // NEW: Different log message for nocache
+    if (noCache) {
+      console.log(`🚫 [NO CACHE] ${targetUrl} (${responseTime}ms) - Cache bypassed`);
+      res.set('X-Cache', 'BYPASS');
+    } else {
+      console.log(`💾 [CACHED] ${targetUrl} (${responseTime}ms)`);
+      res.set('X-Cache', 'MISS');
+    }
+    
     res.send(html);
 
   } catch (error) {
@@ -554,6 +574,7 @@ async function startServer() {
     console.log(`📊 Loaded ${memoryCache.size} cache entries`);
     console.log(`🎯 Dashboard: http://localhost:${PORT}`);
     console.log(`🔧 Proxy API: http://localhost:${PORT}/proxy?url=WEBSITE_URL`);
+    console.log(`🚫 No Cache: http://localhost:${PORT}/proxy?url=WEBSITE_URL&nocache=true`);
   });
 }
 
