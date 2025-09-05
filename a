@@ -28,7 +28,9 @@ let serverStats = {
   browserRestarts: 0,
   lastError: null,
   averageResponseTime: 0,
-  totalResponseTime: 0
+  totalResponseTime: 0,
+  croxyProxyRequests: 0,
+  croxyProxyErrors: 0
 };
 
 // Folder cache persisten
@@ -220,12 +222,191 @@ function getCache(cacheKey) {
   return cached;
 }
 
+// IMPROVED: CroxyProxy scraping function - FIXED VERSION
+async function scrapeViaCroxyProxy(targetUrl) {
+  console.log(`🔄 [CROXYPROXY] Starting scrape for: ${targetUrl}`);
+  
+  const page = await browserContext.newPage();
+  
+  try {
+    await page.goto("https://www.croxyproxy.com/", { 
+      waitUntil: "domcontentloaded",
+      timeout: 15000 
+    });
+    await page.waitForSelector('input#url', { timeout: 10000 });
+    await page.fill('input#url', targetUrl);
+    
+    // Monitor network requests untuk menangkap response target
+    let targetContent = null;
+    let proxyUrl = null;
+    let bestMatch = null;
+    
+    // Setup response handler sebelum klik submit
+    page.on('response', async (response) => {
+      const url = response.url();
+      const contentType = response.headers()['content-type'] || '';
+      
+      // Filter hanya HTML response yang mengandung __cpo= parameter
+      if (url.includes('__cpo=') && 
+          response.status() === 200 && 
+          contentType.includes('text/html')) {
+        
+        // Skip file assets saja, jangan skip URL utama
+        const urlPath = url.toLowerCase();
+        if (urlPath.includes('.js') || 
+            urlPath.includes('.css') || 
+            urlPath.includes('.png') || 
+            urlPath.includes('.jpg') || 
+            urlPath.includes('.jpeg') || 
+            urlPath.includes('.gif') || 
+            urlPath.includes('.ico') || 
+            urlPath.includes('.svg') || 
+            urlPath.includes('.woff') || 
+            urlPath.includes('.ttf') || 
+            urlPath.includes('__cpa.cp.js') ||
+            urlPath.includes('favicon')) {
+          return; // Skip file assets
+        }
+        
+        try {
+          const responseText = await response.text();
+          
+          // Validasi lebih fleksibel - prioritaskan content yang lebih besar dan memiliki struktur HTML
+          if (responseText.length > 1000 && // Minimal 1KB (lebih fleksibel)
+              responseText.includes('<html') && // Harus ada tag HTML
+              responseText.includes('<body') && // Harus ada tag BODY
+              !responseText.includes('Proxy is launching') && // Bukan loading page
+              !responseText.includes('Please wait while') && // Bukan loading intermediate
+              !responseText.includes('Redirecting...')) { // Bukan redirect page
+            
+            // Hitung skor kualitas content
+            let score = responseText.length; // Base score dari ukuran
+            
+            // Bonus jika mengandung content yang relevan
+            if (responseText.includes('<title>')) score += 5000;
+            if (responseText.includes('<meta')) score += 3000;
+            if (responseText.includes('<script')) score += 2000;
+            if (responseText.includes('<link')) score += 1000;
+            
+            // Penalty jika mengandung indikator CroxyProxy
+            if (responseText.includes('croxyproxy.com')) score -= 10000;
+            if (responseText.includes('Enter the address')) score -= 15000;
+            if (responseText.includes('__cpi.php')) score -= 8000;
+            if (responseText.includes('__cpa.cp.js')) score -= 5000;
+            
+            // Simpan jika ini content terbaik sejauh ini
+            if (!bestMatch || score > bestMatch.score) {
+              bestMatch = {
+                content: responseText,
+                url: url,
+                score: score
+              };
+              console.log(`🏆 [CROXYPROXY] Dataset Found: ${url} (score: ${score})`);
+            }
+            
+          } else {
+            return;
+          }
+        } catch (error) {
+            return
+        }
+      } else if (url.includes('__cpo=')) {
+        return
+      }
+    });
+    
+    // Klik tombol Go!
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
+      page.click('button#requestSubmit')
+    ]);
+    
+    // Tunggu sebentar untuk memastikan semua content ter-load
+    await page.waitForTimeout(8000); // Tambah waktu tunggu
+    
+    // Gunakan best match jika ada
+    if (bestMatch && bestMatch.score > 0) {
+      targetContent = bestMatch.content;
+      proxyUrl = bestMatch.url;
+    }
+    
+    // Jika belum mendapat content dari response listener, ambil dari current page
+    if (!targetContent) {
+      // Double check apakah halaman sudah final
+      const currentUrl = page.url();
+      const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 1000) || '').catch(() => '');
+      if (!currentUrl.includes('__cpo=')) {
+        throw new Error("Tidak berhasil mencapai target site melalui CroxyProxy");
+      }
+      
+      if (bodyText.includes('Proxy is launching') || 
+          bodyText.includes('Loading...') ||
+          bodyText.includes('Please wait') ||
+          bodyText.includes('Enter the address')) {
+        throw new Error("Masih stuck di halaman loading CroxyProxy");
+      }
+      
+      targetContent = await page.content();
+      proxyUrl = currentUrl;
+    }
+    
+    // Validasi content
+    if (!targetContent || targetContent.length < 500) {
+      throw new Error(`Content terlalu kecil atau tidak ditemukan (${targetContent ? targetContent.length : 0} bytes)`);
+    }
+    
+    // Cek apakah content masih menunjukkan halaman error/loading CroxyProxy
+    if (targetContent.includes("Proxy is launching") || 
+        targetContent.includes("Enter the address") ||
+        (targetContent.includes("croxyproxy.com") && !targetContent.includes('<title>') && targetContent.length < 10000)) {
+      throw new Error("Masih menampilkan halaman CroxyProxy, bukan target site");
+    }
+    
+    // FIXED: Clean content dari elemen CroxyProxy
+    let cleanedContent = targetContent;
+    
+    // Hapus script CroxyProxy
+    cleanedContent = cleanedContent.replace(/<script[^>]*__cpa\.cp\.js[^>]*><\/script>/gi, '');
+    cleanedContent = cleanedContent.replace(/<script[^>]*croxyproxy[^>]*>.*?<\/script>/gis, '');
+    
+    // Hapus meta tags CroxyProxy
+    cleanedContent = cleanedContent.replace(/<meta[^>]*croxyproxy[^>]*>/gi, '');
+    
+    // Fix relative URLs - ganti dengan proxy URLs
+    if (proxyUrl) {
+      try {
+        const proxyBase = proxyUrl.split('?')[0];
+        const encodedUrl = Buffer.from(targetUrl).toString('base64');
+        cleanedContent = cleanedContent.replace(/href=["']\/([^"']*)/g, `href="${proxyBase}/$1?__cpo=${encodedUrl}"`);
+        cleanedContent = cleanedContent.replace(/src=["']\/([^"']*)/g, `src="${proxyBase}/$1?__cpo=${encodedUrl}"`);
+      } catch (error) {
+        console.log(`⚠️ [CROXYPROXY] Failed to fix relative URLs: ${error.message}`);
+      }
+    }
+    
+    console.log(`✅ [CROXYPROXY] Successfully scraped via CroxyProxy`);
+    console.log(`🔗 [CROXYPROXY] Proxy URL: ${proxyUrl}`);
+    
+    return { 
+      html: cleanedContent, // Return cleaned HTML!
+      url: proxyUrl || page.url(),
+      originalUrl: targetUrl 
+    };
+    
+  } catch (error) {
+    console.error(`❌ [CROXYPROXY] Error:`, error.message);
+    serverStats.croxyProxyErrors++;
+    throw error;
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
 // DASHBOARD ROUTE - Server-side rendering
 app.get("/", (req, res) => {
   const systemInfo = getSystemInfo();
   const cacheStats = getCacheStats();
   
-  // Calculate performance metrics
   const uptime = Date.now() - serverStats.startTime;
   const avgResponseTime = serverStats.totalRequests > 0 
     ? (serverStats.totalResponseTime / serverStats.totalRequests).toFixed(2)
@@ -235,20 +416,18 @@ app.get("/", (req, res) => {
     ? ((serverStats.cacheHits / serverStats.totalRequests) * 100).toFixed(1)
     : 0;
 
-  // Get recent requests (last 10)
   const recentRequests = serverStats.requestHistory.slice(-10).reverse();
   
-  // Cache entries untuk display
   const cacheEntries = Array.from(memoryCache.entries()).map(([key, data]) => ({
     key: key.substring(0, 8) + '...',
-    url: data.url || 'Unknown',
+    url: data.originalUrl || data.url || 'Unknown',
     size: formatBytes(JSON.stringify(data.html).length),
     created: new Date(data.timestamp).toLocaleString(),
     age: formatDuration(Date.now() - data.timestamp)
-  })).slice(0, 20); // Show only first 20 entries
+  })).slice(0, 20);
 
   res.render("dashboard", {
-    title: "Proxy Scraper Dashboard",
+    title: "CroxyProxy Scraper Dashboard",
     serverStats: {
       ...serverStats,
       uptime: formatDuration(uptime),
@@ -256,6 +435,9 @@ app.get("/", (req, res) => {
       hitRate: hitRate,
       errorRate: serverStats.totalRequests > 0 
         ? ((serverStats.errors / serverStats.totalRequests) * 100).toFixed(1)
+        : 0,
+      croxyProxySuccessRate: serverStats.croxyProxyRequests > 0
+        ? (((serverStats.croxyProxyRequests - serverStats.croxyProxyErrors) / serverStats.croxyProxyRequests) * 100).toFixed(1)
         : 0
     },
     systemInfo,
@@ -264,7 +446,7 @@ app.get("/", (req, res) => {
     cacheEntries,
     browserStatus: browserInstance?.isConnected() ? 'Connected' : 'Disconnected',
     currentTime: new Date().toLocaleString(),
-    query: req.query // Pass query parameters to template
+    query: req.query
   });
 });
 
@@ -287,7 +469,8 @@ app.post("/test", async (req, res) => {
       responseTime: 0,
       success: false,
       contentLength: 0,
-      error: null
+      error: null,
+      method: 'CroxyProxy'
     };
     
     if (cached) {
@@ -296,44 +479,27 @@ app.post("/test", async (req, res) => {
       result.contentLength = cached.html.length;
       serverStats.cacheHits++;
     } else {
-      // Fetch using proxy logic
       if (!browserInstance || !browserInstance.isConnected()) {
         await initBrowser();
       }
 
-      const page = await browserContext.newPage();
-      
       try {
-        await page.goto(testUrl, { 
-          waitUntil: "domcontentloaded",
-          timeout: 15000
-        });
-
-        try {
-          await page.waitForLoadState("networkidle", { timeout: 5000 });
-        } catch (timeoutError) {
-          // Continue if networkidle timeout
-        }
-
-        const html = await page.content();
-        const finalUrl = page.url();
+        serverStats.croxyProxyRequests++;
+        const scrapeResult = await scrapeViaCroxyProxy(testUrl);
         
         result.success = true;
         result.responseTime = Date.now() - startTime;
-        result.contentLength = html.length;
+        result.contentLength = scrapeResult.html.length;
         
-        saveCache(cacheKey, { html, url: finalUrl });
+        saveCache(cacheKey, scrapeResult);
         serverStats.cacheMisses++;
         
       } catch (error) {
         result.error = error.message;
         serverStats.errors++;
-      } finally {
-        await page.close().catch(() => {});
       }
     }
     
-    // Update stats
     serverStats.totalRequests++;
     serverStats.totalResponseTime += result.responseTime;
     serverStats.requestHistory.push({
@@ -341,7 +507,6 @@ app.post("/test", async (req, res) => {
       timestamp: new Date().toLocaleString()
     });
     
-    // Redirect dengan hasil test
     const queryParams = new URLSearchParams({
       testResult: JSON.stringify(result)
     });
@@ -385,11 +550,11 @@ app.post("/restart-browser", async (req, res) => {
   }
 });
 
-// Proxy endpoint (dari kode sebelumnya)
+// MAIN PROXY ENDPOINT - Updated untuk menggunakan CroxyProxy tanpa redirect
 app.get("/proxy", async (req, res) => {
   const startTime = Date.now();
   const targetUrl = req.query.url;
-  const noCache = req.query.nocache === 'true'; // NEW: Check for nocache parameter
+  const noCache = req.query.nocache === 'true';
   
   serverStats.totalRequests++;
   
@@ -399,35 +564,34 @@ app.get("/proxy", async (req, res) => {
   }
 
   const cacheKey = getCacheKey(targetUrl);
-  
-  // NEW: Skip cache check if nocache=true
   const cached = noCache ? null : getCache(cacheKey);
   
   if (cached && !noCache) {
-    console.log(`⚡ [INSTANT CACHE HIT] ${targetUrl}`);
+    console.log(`⚡ [CACHE HIT] ${targetUrl}`);
     serverStats.cacheHits++;
     const responseTime = Date.now() - startTime;
     serverStats.totalResponseTime += responseTime;
     
-    // Add to history
     serverStats.requestHistory.push({
       url: targetUrl,
       cached: true,
       responseTime,
       success: true,
       contentLength: cached.html.length,
-      timestamp: new Date().toLocaleString()
+      timestamp: new Date().toLocaleString(),
+      method: 'Cache'
     });
     
     res.set('X-Cache', 'HIT');
+    res.set('X-Method', 'Cache');
+    res.set('X-Original-URL', targetUrl);
     return res.send(cached.html);
   }
 
-  // NEW: Log nocache usage
   if (noCache) {
     console.log(`🚫 [NO CACHE] Bypassing cache: ${targetUrl}`);
   } else {
-    console.log(`🔄 [CACHE MISS] Fetching: ${targetUrl}`);
+    console.log(`🔄 [CACHE MISS] Fetching via CroxyProxy: ${targetUrl}`);
   }
   
   serverStats.cacheMisses++;
@@ -435,52 +599,40 @@ app.get("/proxy", async (req, res) => {
   if (!browserInstance || !browserInstance.isConnected()) {
     await initBrowser();
   }
-
-  const page = await browserContext.newPage();
   
   try {
-    await page.goto(targetUrl, { 
-      waitUntil: "domcontentloaded",
-      timeout: 15000
-    });
-
-    try {
-      await page.waitForLoadState("networkidle", { timeout: 5000 });
-    } catch (timeoutError) {
-      console.log(`⚠️ NetworkIdle timeout, continuing...`);
-    }
-
-    const finalUrl = page.url();
-    const html = await page.content();
+    serverStats.croxyProxyRequests++;
+    const scrapeResult = await scrapeViaCroxyProxy(targetUrl);
     const responseTime = Date.now() - startTime;
 
-    // NEW: Only save cache if nocache is not enabled
     if (!noCache) {
-      saveCache(cacheKey, { html, url: finalUrl });
+      saveCache(cacheKey, scrapeResult);
     }
     
     serverStats.totalResponseTime += responseTime;
 
-    // Add to history
     serverStats.requestHistory.push({
       url: targetUrl,
       cached: false,
       responseTime,
       success: true,
-      contentLength: html.length,
-      timestamp: new Date().toLocaleString()
+      contentLength: scrapeResult.html.length,
+      timestamp: new Date().toLocaleString(),
+      method: 'CroxyProxy'
     });
 
-    // NEW: Different log message for nocache
     if (noCache) {
-      console.log(`🚫 [NO CACHE] ${targetUrl} (${responseTime}ms) - Cache bypassed`);
+      console.log(`🚫 [NO CACHE] ${targetUrl} (${responseTime}ms) - CroxyProxy direct content`);
       res.set('X-Cache', 'BYPASS');
     } else {
-      console.log(`💾 [CACHED] ${targetUrl} (${responseTime}ms)`);
+      console.log(`💾 [CACHED] ${targetUrl} (${responseTime}ms) - CroxyProxy direct content`);
       res.set('X-Cache', 'MISS');
     }
     
-    res.send(html);
+    res.set('X-Method', 'CroxyProxy');
+    res.set('X-Original-URL', targetUrl);
+    res.set('X-Proxy-URL', scrapeResult.url);
+    res.send(scrapeResult.html);
 
   } catch (error) {
     const responseTime = Date.now() - startTime;
@@ -488,28 +640,26 @@ app.get("/proxy", async (req, res) => {
     serverStats.lastError = error.message;
     serverStats.totalResponseTime += responseTime;
     
-    // Add error to history
     serverStats.requestHistory.push({
       url: targetUrl,
       cached: false,
       responseTime,
       success: false,
       error: error.message,
-      timestamp: new Date().toLocaleString()
+      timestamp: new Date().toLocaleString(),
+      method: 'CroxyProxy'
     });
 
     console.error(`❌ [ERROR] ${targetUrl}: ${error.message}`);
     res.status(500).json({ 
-      error: "Failed to fetch target", 
+      error: "Failed to fetch via CroxyProxy", 
       message: error.message,
       url: targetUrl 
     });
-  } finally {
-    await page.close().catch(() => {});
   }
 });
 
-// API endpoint untuk refresh dashboard data (untuk auto-reload)
+// API endpoint untuk refresh dashboard data
 app.get("/api/stats", (req, res) => {
   const systemInfo = getSystemInfo();
   const cacheStats = getCacheStats();
@@ -527,6 +677,9 @@ app.get("/api/stats", (req, res) => {
         : 0,
       errorRate: serverStats.totalRequests > 0 
         ? ((serverStats.errors / serverStats.totalRequests) * 100).toFixed(1)
+        : 0,
+      croxyProxySuccessRate: serverStats.croxyProxyRequests > 0
+        ? (((serverStats.croxyProxyRequests - serverStats.croxyProxyErrors) / serverStats.croxyProxyRequests) * 100).toFixed(1)
         : 0
     },
     systemInfo,
@@ -570,11 +723,12 @@ async function startServer() {
   loadFileCache();
   
   app.listen(PORT, () => {
-    console.log(`🚀 Proxy Scraper Dashboard running on http://localhost:${PORT}`);
+    console.log(`🚀 CroxyProxy Scraper Dashboard running on http://localhost:${PORT}`);
     console.log(`📊 Loaded ${memoryCache.size} cache entries`);
     console.log(`🎯 Dashboard: http://localhost:${PORT}`);
     console.log(`🔧 Proxy API: http://localhost:${PORT}/proxy?url=WEBSITE_URL`);
     console.log(`🚫 No Cache: http://localhost:${PORT}/proxy?url=WEBSITE_URL&nocache=true`);
+    console.log(`🌐 Method: CroxyProxy Integration (Direct Content)`);
   });
 }
 
